@@ -15,6 +15,7 @@ class LowMC:
     self.number_sboxes = 10
     self.number_rounds = 20
     self.lin_layer = []
+    self.lin_layer_inv = []
     self.round_consts = []
     self.round_key_mats = []
     self.__priv_key = None
@@ -24,10 +25,9 @@ class LowMC:
     self.__sbox_inv = [ 0x00, 0x01, 0x07, 0x02, 0x05, 0x06, 0x03, 0x04 ]
   
     self.__read_constants()
-
-    '''
-    self.generate_priv_key()
-    '''
+    self.invert_lin_matrix()
+    
+    print("INIT DONE")
 
   def generate_priv_key(self):
     temp_key = os.urandom(self.keysize / 8)
@@ -56,7 +56,20 @@ class LowMC:
     return result
 
   def decrypt(self, ciphertext):
-    result = cipertext
+    assert (len(ciphertext) * 8) == self.blocksize, "Ciphertext has length != blocksize"
+    self.__state = BitVector(rawbytes = ciphertext)
+
+    for i in range(self.number_rounds, 0, -1):
+
+      self.__key_addition(i)
+      self.__state = self.__state ^ self.round_consts[i - 1]
+      self.__multiply_with_lin_mat_inv(i - 1)
+      self.__apply_sbox_inv()
+
+    self.__key_addition(0)
+
+    result = bytes.fromhex(self.__state.get_bitvector_in_hex())
+    self.__state = None
     return result
 
   def __apply_sbox(self):
@@ -84,7 +97,32 @@ class LowMC:
 
     result = result_sbox + result_ident
     self.__state = result
-    
+
+  def __apply_sbox_inv(self):
+    result = BitVector(size = self.blocksize)
+    state_copy = self.__state.deep_copy()
+
+    # Copy the identity part of the message
+    result_ident = state_copy[(3 * self.number_sboxes):self.blocksize]
+
+    # Substitute the rest of the message with the sboxes
+    # ----------------------------------------------------
+    # ATTENTION: The 3-bit chunks seem to be reversed 
+    # in the Picnic-Ref-Implementation, compared to the
+    # LowMC-Ref-Implementation and the original LowMC-paper.
+    # Example: state[0:3]='001' becomes '100' then gets sboxed 
+    # to '111' and reversed again for the state-update.
+    # ----------------------------------------------------
+    state_copy = self.__state[0:(3 * self.number_sboxes)]
+    result_sbox = BitVector(size = 0)
+    for i in range(self.number_sboxes):
+      state_index = (3 * i)
+      state_3_bits = state_copy[state_index:state_index + 3].reverse()
+      sbox_3_bits = BitVector(intVal = self.__sbox_inv[int(state_3_bits)], size = 3).reverse()
+      result_sbox = result_sbox + sbox_3_bits
+
+    result = result_sbox + result_ident
+    self.__state = result
 
   def __multiply_with_lin_mat(self, r):
     result = BitVector(size = self.blocksize)
@@ -92,6 +130,12 @@ class LowMC:
       result[i] = (self.lin_layer[r][i] & self.__state).count_bits() % 2
     self.__state = result
     
+  def __multiply_with_lin_mat_inv(self, r):
+    result = BitVector(size = self.blocksize)
+    for i in range(self.blocksize):
+      result[i] = (self.lin_layer_inv[r][i] & self.__state).count_bits() % 2
+    self.__state = result
+
   def __key_addition(self, r):
     round_key = BitVector(size = self.keysize)
     for i in range(self.blocksize):
@@ -140,6 +184,55 @@ class LowMC:
         mat.append(BitVector(bitlist = eval(round_key_mats[(r * self.blocksize) + s])))
       self.round_key_mats.append(mat)
 
+  def invert_lin_matrix(self):
+  
+    self.lin_layer_inv = []
+    for r in range(self.number_rounds):
+
+      # Copy lin_layer
+      mat = []
+      for i in range(self.blocksize):
+        mat.append(self.lin_layer[r][i].deep_copy())
+
+      # Create (initial identity) matrix, where the
+      # inverted matrix will be stored in.
+      inv_mat = []
+      for i in range(self.blocksize):
+        temp_bv = BitVector(intVal = 0, size = self.blocksize)
+        temp_bv[i] = 1
+        inv_mat.append(temp_bv)
+
+      # Transform to upper triangular matrix
+      row = 0
+      for col in range(self.keysize):
+        if (not mat[row][col]):
+          r = row + 1
+          while ((r < self.blocksize) and (not mat[r][col])):
+            r += 1
+          if (r >= self.blocksize):
+            continue
+          else:
+            temp = mat[row]
+            mat[row] = mat[r]
+            mat[r] = temp
+            temp = inv_mat[row]
+            inv_mat[row] = inv_mat[r]
+            inv_mat[r] = temp
+        for i in range (row + 1, self.blocksize):
+          if (mat[i][col]):
+            mat[i] = mat[i] ^ mat[row]
+            inv_mat[i] = inv_mat[i] ^ inv_mat[row]
+        row += 1
+
+      # Transform to identity matriy
+      for col in range(self.keysize, 0, -1):
+        for r in range(col -1):
+          if (mat[r][col - 1]):
+            mat[r] = mat[r] ^ mat[col - 1]
+            inv_mat[r] = inv_mat[r] ^ inv_mat[col - 1]
+
+      self.lin_layer_inv.append(inv_mat)
+  
 def main():
 
   lowmc = LowMC()
@@ -150,10 +243,15 @@ def main():
   test_ciphertext = bytes([ 0x0E, 0x30, 0x72, 0x0B, 0x9F, 0x64, 0xD5, 0xC2, 0xA7, 0x77, 0x1C, 0x8C, 0x23, 0x8D, 0x8F, 0x70 ])
 
   lowmc.set_priv_key(test_priv_key)
+  print("START ENCRYPTION")
   cipher = lowmc.encrypt(test_plaintext)
+  print("START DECRYPTION")
+  plain_new = lowmc.decrypt(cipher)
   print("plaintext:           " + test_plaintext.hex().upper())
   print("ciphertext:          " + cipher.hex().upper())
   print("expected ciphertext: " + test_ciphertext.hex().upper())
+  print("plaintext:           " + plain_new.hex().upper())
+  
 
 if __name__ == '__main__':
     main()
