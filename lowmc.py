@@ -9,11 +9,35 @@ from BitVector import BitVector
 
 class LowMC:
 
-  def __init__(self):
-    self.blocksize = 128
-    self.keysize = 128
-    self.number_sboxes = 10
-    self.number_rounds = 20
+  def __init__(self, param):
+
+    print("LowMC init for " + param)
+
+    if (param == 'picnic-L1-FS') or \
+       (param == 'picnic-L1-UR') or \
+       (param == 'picnic2-L1-FS'):
+      self.blocksize = 128
+      self.keysize   = 128
+      self.number_sboxes = 10
+      self.number_rounds = 20
+      self.filename  = 'picnic-L1.dat'
+    elif (param == 'picnic-L3-FS') or \
+         (param == 'picnic-L3-UR') or \
+         (param == 'picnic2-L3-FS'):
+      self.blocksize = 192
+      self.keysize   = 192
+      self.number_sboxes = 10
+      self.number_rounds = 30
+      self.filename  = 'picnic-L3.dat'
+    elif (param == 'picnic-L5-FS') or \
+         (param == 'picnic-L5-UR') or \
+         (param == 'picnic2-L5-FS'):
+      self.blocksize = 256
+      self.keysize   = 256
+      self.number_sboxes = 10
+      self.number_rounds = 38
+      self.filename  = 'picnic-L5.dat'
+
     self.lin_layer = []
     self.lin_layer_inv = []
     self.round_consts = []
@@ -27,7 +51,7 @@ class LowMC:
     self.__read_constants()
     self.invert_lin_matrix()
     
-    print("INIT DONE")
+    print("LowMC init done")
 
   def generate_priv_key(self):
     temp_key = os.urandom(self.keysize / 8)
@@ -143,7 +167,7 @@ class LowMC:
     self.__state = self.__state ^ round_key
 
   def __read_constants(self):
-    with open('lowmc_picnic1_l1.dat', 'r') as matfile:
+    with open(self.filename, 'r') as matfile:
       const_data = matfile.read()
 
     const_data_split = const_data.split('\n')
@@ -224,7 +248,7 @@ class LowMC:
             inv_mat[i] = inv_mat[i] ^ inv_mat[row]
         row += 1
 
-      # Transform to identity matriy
+      # Transform to identity matrix
       for col in range(self.keysize, 0, -1):
         for r in range(col -1):
           if (mat[r][col - 1]):
@@ -232,27 +256,3 @@ class LowMC:
             inv_mat[r] = inv_mat[r] ^ inv_mat[col - 1]
 
       self.lin_layer_inv.append(inv_mat)
-  
-def main():
-
-  lowmc = LowMC()
-
-  # Testvectors for Picnic1_L1
-  test_priv_key = bytes([ 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ])
-  test_plaintext = bytes([ 0xAB, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ])
-  test_ciphertext = bytes([ 0x0E, 0x30, 0x72, 0x0B, 0x9F, 0x64, 0xD5, 0xC2, 0xA7, 0x77, 0x1C, 0x8C, 0x23, 0x8D, 0x8F, 0x70 ])
-
-  lowmc.set_priv_key(test_priv_key)
-  print("START ENCRYPTION")
-  cipher = lowmc.encrypt(test_plaintext)
-  print("START DECRYPTION")
-  plain_new = lowmc.decrypt(cipher)
-  print("plaintext:           " + test_plaintext.hex().upper())
-  print("ciphertext:          " + cipher.hex().upper())
-  print("expected ciphertext: " + test_ciphertext.hex().upper())
-  print("plaintext:           " + plain_new.hex().upper())
-  
-
-if __name__ == '__main__':
-    main()
-

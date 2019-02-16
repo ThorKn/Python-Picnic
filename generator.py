@@ -12,10 +12,13 @@ Modified by Thorsten Knoll, Feb 2019
 ---------------------------------------------------
 '''
 
-# Parameters for Picnic1-L1 (128, 128, 20)
-blocksize = 128
-keysize = 128
-rounds = 20
+import sys
+
+# Parameterset Picnic
+blocksize = None
+keysize = None
+rounds = None
+filename = None
 
 def main():
     ''' Use the global parameters `blocksize`, `keysize` and `rounds`
@@ -23,6 +26,31 @@ def main():
         LowMC instance. Save those in a file named
         `matrices_and_constants.dat`.
     '''
+
+    # Parse args
+    param = sys.argv[1]
+    if (param == 'picnic-L1-FS') or \
+       (param == 'picnic-L1-UR') or \
+       (param == 'picnic2-L1-FS'):
+      blocksize = 128
+      keysize   = 128
+      rounds    = 20
+      filename  = 'picnic-L1.dat'
+    elif (param == 'picnic-L3-FS') or \
+         (param == 'picnic-L3-UR') or \
+         (param == 'picnic2-L3-FS'):
+      blocksize = 192
+      keysize   = 192
+      rounds    = 30
+      filename  = 'picnic-L3.dat'
+    elif (param == 'picnic-L5-FS') or \
+         (param == 'picnic-L5-UR') or \
+         (param == 'picnic2-L5-FS'):
+      blocksize = 256
+      keysize   = 256
+      rounds    = 38
+      filename  = 'picnic-L5.dat'
+
     gen = grain_ssg()
 
     linlayers = []
@@ -39,7 +67,7 @@ def main():
         mat = instantiate_matrix(blocksize, keysize, gen)
         roundkey_matrices.append(mat)
 
-    with open('lowmc_picnic1_l1.dat', 'w') as matfile:
+    with open(filename, 'w') as matfile:
         s = str(blocksize) + '\n' + str(keysize) + '\n' + str(rounds) + '\n'
         matfile.write(s)
         for r in range(rounds):
