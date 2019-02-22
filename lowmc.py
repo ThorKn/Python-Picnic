@@ -21,6 +21,7 @@ under MIT Licence. See the LICENCE.md file.
 
 import os
 from BitVector import BitVector
+import copy
 
 class LowMC:
 
@@ -127,7 +128,29 @@ class LowMC:
 
   '''
   /////////////////////////////
-  ///   Priavte functions   ///
+  ///   Picnic functions    ///
+  /////////////////////////////
+  '''
+  def mpc_matrix_mul_keys(self, outputs, inputs, r):
+    for player in range(3):
+      for i in range(self.blocksize):
+        outputs[player][i] = (self.__round_key_mats[r][i] & inputs[player]).count_bits() % 2
+    return outputs
+
+  def mpc_matrix_mul_lin(self, outputs, inputs, r):
+    tmp_inputs = copy.deepcopy(inputs)
+    for player in range(3):
+      for i in range(self.blocksize):
+        outputs[player][i] = (self.__lin_layer[r][i] & tmp_inputs[player]).count_bits() % 2
+    return outputs
+
+  def mpc_xor_rconsts(self, states, r):
+    states[0] = states[0] ^ self.__round_consts[r]
+    return states
+
+  '''
+  /////////////////////////////
+  ///   Private functions   ///
   /////////////////////////////
   '''
   def __apply_sbox(self):

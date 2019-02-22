@@ -13,8 +13,20 @@ class View:
 
 class Commitment:
   def __init__(self, hash_length, n_commitments):
-    self.hashes = BitVector(intVal = 0, size = hash_length)
+    self.hash = BitVector(intVal = 0, size = hash_length)
     self.n_commitments = n_commitments
 
-    
+class Proof:
+  def __init__(self):
+    self.seed_1 = None
+    self.seed_2 = None
+    self.i_share = None
+    self.transcript = None
+    self.view_3_commit = None
+
+class Signature:
+  def __init__(self):
+    self.proofs = None
+    self.challenges = None
+    self.salt = None
 
