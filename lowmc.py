@@ -20,8 +20,10 @@ under MIT Licence. See the LICENCE.md file.
 '''
 
 import os
-from BitVector import BitVector
 import copy
+
+from BitVector import BitVector
+
 
 class LowMC:
 

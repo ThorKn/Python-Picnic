@@ -1,7 +1,7 @@
 import os
-from BitVector import BitVector
-import hashlib
 
+import hashlib
+from BitVector import BitVector
 from lowmc import LowMC
 from picnic_types import *
 
@@ -9,6 +9,7 @@ class Picnic:
 
   def __init__(self):
 
+    # Public picnic parameters
     self.blocksize = 128
     self.blocksize_bytes = int(self.blocksize / 8)
     self.keysize = 128
@@ -18,6 +19,7 @@ class Picnic:
     self.hash_length = 256
     self.lowmc = LowMC('picnic-L1')
 
+    # Private variables
     self.__priv_key = None
     self.__pub_key = None  
     self.__views = []
@@ -172,6 +174,8 @@ class Picnic:
     bc = (BitVector(intVal = 0, size = 3))
     ca = (BitVector(intVal = 0, size = 3))
 
+    # Sbox'ing the first 3*self.sboxes bits for
+    # all three players
     for i in range(0,(3 * self.sboxes),3):
       
       for j in range(3):
@@ -190,7 +194,7 @@ class Picnic:
 
     return states
 
-  # MPC LowMC AND for signing
+  # MPC LowMC AND for signing and updating the transcripts
   def mpc_and(self, in1, in2, tapes, r, t):
     
     rand = BitVector(intVal = 0, size = 3)
@@ -199,7 +203,8 @@ class Picnic:
     rand[2] = tapes[2][self.__tapes_pos]
 
     result = BitVector(intVal = 0, size = 3)
-
+    
+    # Update the transcripts for all three players
     for i in range(3):
       result[i] = (in1[i] & in2[(i + 1) % 3]) ^ \
                   (in1[(i + 1) % 3] & in2[i]) ^ \
@@ -273,7 +278,7 @@ class Picnic:
                      self.__views[0][2].o_share
     shake128.update(bytes.fromhex(circuit_output.get_bitvector_in_hex()))
 
-    # Hash p (plaintext), salt, message
+    # Hash p (plaintext), salt and message to get the challenge from it
     shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
     shake128.update(bytes.fromhex(self.__salt.get_bitvector_in_hex()))
     shake128.update(message)
@@ -283,6 +288,11 @@ class Picnic:
     tmp_bitvector = BitVector(rawbytes = tmp_hash)
     bit_pos = 0
     result = []
+
+    # Build the challenge in {0,1,2}* as a list.
+    # Each two bits in the hash become one element in the challenge-list
+    # until the challenge-list has the length of self.mpc_rounds.
+    # There can be re-calculating of the hash to reach that length.
     while(1):
       a = tmp_bitvector[bit_pos]
       b = tmp_bitvector[bit_pos + 1]
@@ -434,13 +444,18 @@ class Picnic:
 
   
 def main():
+  
+  # Init picnic and set keys
   picnic = Picnic()
   priv_key = bytes([0xA5, 0x2A, 0x6C, 0x86, 0xC2, 0x9A, 0x19, 0x3B, 0x42, 0xE9, 0x97, 0xAC, 0xAC, 0xB2, 0x66, 0x03])  
   p        = bytes([0x95, 0xB3, 0xB0, 0x21, 0x8B, 0x6D, 0xFE, 0xEE, 0x04, 0x9D, 0xF0, 0x22, 0x6E, 0x5B, 0xB5, 0xEA])
   picnic.generate_keys(p = p, priv_key = priv_key)
 
+  # Create message and then sign it.
   message = bytearray([0x01] * 500)
   picnic.sign(message)
+
+  # Print and serialize the signature
   picnic.print_signature()
   picnic.serialize_signature()
 
