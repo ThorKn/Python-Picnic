@@ -1,4 +1,5 @@
 import os
+import math
 
 import hashlib
 from BitVector import BitVector
@@ -30,6 +31,7 @@ class Picnic:
     self.__challenges = None
     self.__prove = None
     self.__signature = Signature()
+    self.__signature_ser = None
 
   ##########################
   ###   Sign and verify  ###
@@ -39,7 +41,7 @@ class Picnic:
   # @param message as bytes
   def sign(self, message):
 
-    # Initialize views
+    # Initialize empty views[mpc_rounds][players]
     for _ in range(self.mpc_rounds):
       three_views = []
       for _ in range(3):
@@ -47,7 +49,7 @@ class Picnic:
         three_views.append(single_view)
       self.__views.append(three_views)
 
-    # Initialize commitments
+    # Initialize empty commitments[mpc_rounds][players]
     for _ in range(self.mpc_rounds):
       three_commits = []
       for _ in range(3):
@@ -84,7 +86,6 @@ class Picnic:
     for t in range(self.mpc_rounds):
 
       print("MPC round " + str(t))
-
       tapes = []
       self.__tapes_pos = 0
 
@@ -118,6 +119,67 @@ class Picnic:
     self.__signature.challenges = self.__challenges
     self.__signature.salt = self.__salt
   
+  def verify(self, message):
+
+    # Reset private variables
+    self.__views = []
+    self.__commitments = []
+    self.__seeds = []
+    self.__salt = None
+    self.__tapes_pos = 0
+    self.__challenges = None
+    self.__prove = None
+    
+    # Initialize empty commitments[mpc_rounds][players]
+    for _ in range(self.mpc_rounds):
+      three_commits = []
+      for _ in range(3):
+        single_commit = Commitment(self.hash_length, 0)
+        three_commits.append(single_commit)
+      self.__commitments.append(three_commits)
+
+    # Initialize empty outputs[mpc_rounds][players]
+    outputs = []
+    for _ in range(self.mpc_rounds):
+      three_outputs = []
+      for _ in range(3):
+        single_output = BitVector(intVal = 0, size = self.blocksize)
+        three_outputs.append(single_output)
+      outputs.append(three_outputs)
+
+    # Initialize empty views[mpc_rounds][2]
+    for _ in range(self.mpc_rounds):
+      three_views = []
+      for _ in range(2):
+        single_view = View(self.blocksize, self.rounds, self.sboxes)
+        three_views.append(single_view)
+      self.__views.append(three_views)
+
+
+    for t in range(self.mpc_rounds):
+
+      # Create tapes[0..1]
+      tapes = []
+      self.__tapes_pos = 0
+      for j in range(2):
+        length = int((self.blocksize + 2 * self.rounds * self.sboxes) / 8)
+        tapes.append(BitVector(intVal = 0, size = length))
+
+      # Copy transcript to view[t][1]
+      self.__views[t][1].transcript = self.__signature.proofs[t].transcript
+
+      # Rebuild tapes and i_shares
+      chal_trit = self.__signature.challenges[t]
+      print("Challenge trit: " + str(chal_trit))
+
+      if (chal_trit == 0):
+        
+      
+      
+      
+
+    return
+
   ##############################
   ###   LowMC MPC functions  ###
   ##############################
@@ -152,13 +214,6 @@ class Picnic:
     for i in range(3):
       self.__views[t][i].o_share = states[i]
       
-    '''
-    for i in range(3):
-      print("state " + str(i) + ": " + states[i].get_bitvector_in_hex())
-    for i in range(3):
-      print("transcript " + str(i) + ": " + self.__views[t][i].transcript.get_bitvector_in_hex())
-    '''
-
     # This is part of a hack for the end of tmp_view_raw
     new_end_of_tmp_view = bytes.fromhex(states[2][self.blocksize - 40:self.blocksize].get_bitvector_in_hex())
 
@@ -425,7 +480,85 @@ class Picnic:
       if (challenge_value == 1 or challenge_value == 2):
         result.extend(bytes.fromhex(self.__signature.proofs[t].i_share.get_bitvector_in_hex()))
 
-    print(result.hex())
+    self.__signature_ser = result
+
+  def deserialize_signature(self):
+
+    # Create an empty signature
+    self.__signature = Signature()
+    self.__signature.proofs = []
+    bytes_pos = 0
+
+    # Get challenges
+    challenge_length = math.ceil(2 * self.mpc_rounds / 8)
+    challenges_bytes = self.__signature_ser[bytes_pos:bytes_pos + challenge_length]
+    challenges_bitvector = BitVector(rawbytes = challenges_bytes)
+    challenges = []
+    for i in range(0, (2 * self.mpc_rounds), 2):
+      two_bits = str(challenges_bitvector[i:i + 2])
+      if (two_bits == '00'):
+        challenges.append(0)
+      if (two_bits == '10'):
+        challenges.append(1)
+      if (two_bits == '01'):
+        challenges.append(2)
+    self.__signature.challenges = challenges
+    bytes_pos += challenge_length
+
+    # Get salt
+    salt_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
+    salt = BitVector(rawbytes = salt_bytes)
+    self.__signature.salt = salt
+    bytes_pos += self.blocksize_bytes
+
+    # Deserialize the proofs in all mpc_rounds
+    for t in range(self.mpc_rounds):
+
+      proof = Proof()
+      chal_bit = challenges[t]
+
+      # Get view_3_commitment
+      view_3_commit_bytes = self.__signature_ser[bytes_pos:bytes_pos + int(self.hash_length / 8)]
+      proof.view_3_commit = view_3_commit_bytes
+      bytes_pos += int(self.hash_length / 8)
+
+      # Get transcript
+      transcript_bytes = self.__signature_ser[bytes_pos:bytes_pos + int((3 * self.rounds * self.sboxes)/8)]
+      proof.transcript = BitVector(rawbytes = transcript_bytes)
+      bytes_pos += int((3 * self.rounds * self.sboxes)/8)
+
+      # Get seed_1
+      seed_1_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
+      proof.seed_1 = BitVector(rawbytes = seed_1_bytes)
+      bytes_pos += self.blocksize_bytes
+
+      # Get seed_2
+      seed_2_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
+      proof.seed_2 = BitVector(rawbytes = seed_2_bytes)
+      bytes_pos += self.blocksize_bytes
+
+      # If chal_bit is not 0, then get i_share
+      if not(chal_bit == 0):
+        i_share_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
+        proof.i_share = BitVector(rawbytes = i_share_bytes) 
+        bytes_pos += self.blocksize_bytes
+
+      self.__signature.proofs.append(proof)
+
+    return
+
+  # Write serialized signature to file
+  def write_ser_sig_to_file(self, filename):
+    
+    with open(filename, "w") as text_file:
+      text_file.write(self.__signature_ser.hex().upper())
+
+  # Read serialized signature from file
+  def read_ser_sig_from_file(self, filename):
+
+    with open(filename, "r") as text_file:
+      sig_ser_hex = text_file.read()
+    self.__signature_ser = bytes.fromhex(sig_ser_hex)
 
   # Print out a (not serialized) signature from self.__signature
   def print_signature(self):
@@ -442,22 +575,7 @@ class Picnic:
       if (not (self.__signature.challenges[t] == 0)):
         print("inputShare: " + self.__signature.proofs[t].i_share.get_bitvector_in_hex())
 
-  
-def main():
-  
-  # Init picnic and set keys
-  picnic = Picnic()
-  priv_key = bytes([0xA5, 0x2A, 0x6C, 0x86, 0xC2, 0x9A, 0x19, 0x3B, 0x42, 0xE9, 0x97, 0xAC, 0xAC, 0xB2, 0x66, 0x03])  
-  p        = bytes([0x95, 0xB3, 0xB0, 0x21, 0x8B, 0x6D, 0xFE, 0xEE, 0x04, 0x9D, 0xF0, 0x22, 0x6E, 0x5B, 0xB5, 0xEA])
-  picnic.generate_keys(p = p, priv_key = priv_key)
+  # Print out a serialized signature from self.__signature_ser
+  def print_signature_ser(self):
+    print(self.__signature_ser.hex().upper())
 
-  # Create message and then sign it.
-  message = bytearray([0x01] * 500)
-  picnic.sign(message)
-
-  # Print and serialize the signature
-  picnic.print_signature()
-  picnic.serialize_signature()
-
-if __name__ == '__main__':
-    main()
