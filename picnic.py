@@ -92,12 +92,12 @@ class Picnic:
       # Create tapes[0..2] and i_shares
       for j in range(2):
         length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(t, j, length) + new_end_of_tmp_view
+        tmp_view_raw = self.mpc_create_random_tape(self.__seeds[t][j], self.__salt, t, j, length) + new_end_of_tmp_view
         self.__views[t][j].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
         tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
 
       length_2 = int((3 * self.rounds * self.sboxes) / 8)
-      tapes.append(BitVector(rawbytes = self.mpc_create_random_tape(t, 2, length_2)))
+      tapes.append(BitVector(rawbytes = self.mpc_create_random_tape(self.__seeds[t][2], self.__salt, t, 2, length_2)))
       self.__views[t][2].i_share = self.__priv_key ^ \
                                    self.__views[t][0].i_share ^ \
                                    self.__views[t][1].i_share
@@ -161,22 +161,70 @@ class Picnic:
       # Create tapes[0..1]
       tapes = []
       self.__tapes_pos = 0
-      for j in range(2):
-        length = int((self.blocksize + 2 * self.rounds * self.sboxes) / 8)
-        tapes.append(BitVector(intVal = 0, size = length))
 
       # Copy transcript to view[t][1]
       self.__views[t][1].transcript = self.__signature.proofs[t].transcript
 
-      # Rebuild tapes and i_shares
+      # Rebuild tapes and i_shares in regard to the challenges
       chal_trit = self.__signature.challenges[t]
-      print("Challenge trit: " + str(chal_trit))
 
+      # Calculate both i_shares
       if (chal_trit == 0):
+        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
+        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
+                                                  self.__signature.salt, \
+                                                  t, 0, length)
+        self.__views[t][0].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
+        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
+
+        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
+                                                   self.__signature.salt, \
+                                                   t, 1, length)
+        self.__views[t][1].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
+        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
+
+      # Calculate i_share for player 0
+      # i_share for player 1 was given in the proof
+      if (chal_trit == 1):
+        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
+        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
+                                                   self.__signature.salt, \
+                                                   t, 1, length)
+        self.__views[t][0].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
+        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
         
-      
-      
-      
+        length = int((3 * self.rounds * self.sboxes) / 8)
+        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
+                                                   self.__signature.salt, \
+                                                   t, 2, length)
+        tapes.append(BitVector(rawbytes = tmp_view_raw[0:length]))
+        self.__views[t][1].i_share = self.__signature.proofs[t].i_share
+
+      # i_share for player 0 was given in the proof
+      # Calculate i_share for player 1
+      if (chal_trit == 2):
+        length = int((3 * self.rounds * self.sboxes) / 8)
+        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
+                                                   self.__signature.salt, \
+                                                   t, 2, length)
+        tapes.append(BitVector(rawbytes = tmp_view_raw[0:length]))
+        self.__views[t][0].i_share = self.__signature.proofs[t].i_share
+
+        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
+        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
+                                                   self.__signature.salt, \
+                                                   t, 0, length)
+        self.__views[t][1].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
+        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
+
+      print("MPC Round: " + str(t))
+      print("Challenge: " + str(chal_trit))
+      print("Tape 0   : " + tapes[0].get_bitvector_in_hex().upper())
+      print("Tape 1   : " + tapes[1].get_bitvector_in_hex().upper())
+      print("iShare 0 : " + self.__views[t][0].i_share.get_bitvector_in_hex().upper())
+      print("iShare 1 : " + self.__views[t][1].i_share.get_bitvector_in_hex().upper())
+
+      # Run MPC
 
     return
 
@@ -307,6 +355,26 @@ class Picnic:
 
       self.__commitments[t][i].hash = shake128.digest(int(self.hash_length / 8))
       
+  # Get one long hash for the random tapes
+  def mpc_create_random_tape(self, seed, salt, mpc_round, player, length):
+
+    # H2(seed[mpc_round][player])
+    shake128 = hashlib.shake_128()
+    shake128.update(bytes([0x02]))
+    shake128.update(bytes.fromhex(seed.get_bitvector_in_hex()))
+    h2 = shake128.digest(int(self.hash_length / 8))
+
+    # Create random tape
+    shake128 = hashlib.shake_128()
+    shake128.update(h2)
+    shake128.update(bytes.fromhex(salt.get_bitvector_in_hex()))
+    shake128.update(bytes([mpc_round, 0]))
+    shake128.update(bytes([player, 0]))
+    length_le = length.to_bytes(2, byteorder='little')
+    shake128.update(length.to_bytes(2, byteorder='little'))
+
+    return shake128.digest(length)
+
   ################################
   ###   Challenges and proofs  ###
   ################################
@@ -400,26 +468,6 @@ class Picnic:
       proofs.append(tmp_proof)
 
     return proofs    
-
-  # Get one long hash for the random tapes
-  def mpc_create_random_tape(self, mpc_round, player, length):
-
-    # H2(seed[mpc_round][player])
-    shake128 = hashlib.shake_128()
-    shake128.update(bytes([0x02]))
-    shake128.update(bytes.fromhex(self.__seeds[mpc_round][player].get_bitvector_in_hex()))
-    h2 = shake128.digest(int(self.hash_length / 8))
-
-    # Create random tape
-    shake128 = hashlib.shake_128()
-    shake128.update(h2)
-    shake128.update(bytes.fromhex(self.__salt.get_bitvector_in_hex()))
-    shake128.update(bytes([mpc_round, 0]))
-    shake128.update(bytes([player, 0]))
-    length_le = length.to_bytes(2, byteorder='little')
-    shake128.update(length.to_bytes(2, byteorder='little'))
-
-    return shake128.digest(length)
   
   ###########################
   ###   Helper functions  ###
