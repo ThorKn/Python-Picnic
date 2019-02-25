@@ -133,15 +133,15 @@ class LowMC:
   ///   Picnic functions    ///
   /////////////////////////////
   '''
-  def mpc_matrix_mul_keys(self, outputs, inputs, r):
-    for player in range(3):
+  def mpc_matrix_mul_keys(self, outputs, inputs, r, players):
+    for player in range(players):
       for i in range(self.blocksize):
         outputs[player][i] = (self.__round_key_mats[r][i] & inputs[player]).count_bits() % 2
     return outputs
 
-  def mpc_matrix_mul_lin(self, outputs, inputs, r):
+  def mpc_matrix_mul_lin(self, outputs, inputs, r, players):
     tmp_inputs = copy.deepcopy(inputs)
-    for player in range(3):
+    for player in range(players):
       for i in range(self.blocksize):
         outputs[player][i] = (self.__lin_layer[r][i] & tmp_inputs[player]).count_bits() % 2
     return outputs
@@ -149,6 +149,12 @@ class LowMC:
   def mpc_xor_rconsts(self, states, r):
     states[0] = states[0] ^ self.__round_consts[r]
     return states
+
+  def mpc_xor_rconsts_verify(self, states, r, chal_trit):
+    if (chal_trit == 0):
+      states[0] = states[0] ^ self.__round_consts[r]
+    if (chal_trit == 2):
+      states[1] = states[1] ^ self.__round_consts[r]
 
   '''
   /////////////////////////////

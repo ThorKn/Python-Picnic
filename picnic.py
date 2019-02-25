@@ -155,7 +155,6 @@ class Picnic:
         three_views.append(single_view)
       self.__views.append(three_views)
 
-
     for t in range(self.mpc_rounds):
 
       # Create tapes[0..1]
@@ -167,6 +166,8 @@ class Picnic:
 
       # Rebuild tapes and i_shares in regard to the challenges
       chal_trit = self.__signature.challenges[t]
+      tmp_view_raw = None
+      tmp_view_raw_short = None
 
       # Calculate both i_shares
       if (chal_trit == 0):
@@ -194,20 +195,20 @@ class Picnic:
         tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
         
         length = int((3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
+        tmp_view_raw_short = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
                                                    self.__signature.salt, \
                                                    t, 2, length)
-        tapes.append(BitVector(rawbytes = tmp_view_raw[0:length]))
+        tapes.append(BitVector(rawbytes = tmp_view_raw_short[0:length]))
         self.__views[t][1].i_share = self.__signature.proofs[t].i_share
 
       # i_share for player 0 was given in the proof
       # Calculate i_share for player 1
       if (chal_trit == 2):
         length = int((3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
+        tmp_view_raw_short = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
                                                    self.__signature.salt, \
                                                    t, 2, length)
-        tapes.append(BitVector(rawbytes = tmp_view_raw[0:length]))
+        tapes.append(BitVector(rawbytes = tmp_view_raw_short[0:length]))
         self.__views[t][0].i_share = self.__signature.proofs[t].i_share
 
         length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
@@ -225,12 +226,47 @@ class Picnic:
       print("iShare 1 : " + self.__views[t][1].i_share.get_bitvector_in_hex().upper())
 
       # Run MPC
+      self.run_mpc_verify(t, tapes, tmp_view_raw, chal_trit)
 
     return
 
   ##############################
   ###   LowMC MPC functions  ###
   ##############################
+
+  def run_mpc_verify(self, t, tapes, tmp_view_raw, chal_trit):
+
+    key_shares = []
+    states = []
+    roundkeys = []
+
+    # Create empty roundkeys and states
+    # Fill key_shares with views
+    for i in range(2):
+      roundkeys.append(BitVector(intVal = 0, size = self.blocksize))
+      states.append(BitVector(intVal = 0, size = self.blocksize))
+      key_shares.append(self.__views[t][i].i_share)
+
+    # Init states by xor'ing plaintext and roundkeys
+    states = self.mpc_xor_constant_verify(states, self.__pub_key.p, chal_trit)
+    roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, 0, 2)
+    states = self.mpc_xor(states, roundkeys, 2)
+
+    for r in range(self.rounds):
+      
+      # Sbox
+
+      # matrix_mul_keys
+      states = self.lowmc.mpc_matrix_mul_lin(states, states, r, 2)
+
+      # xor_constants
+      states = self.lowmc.mpc_xor_rconsts_verify(states, r, chal_trit)
+
+      # xor roundkeys
+      roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, r + 1, 2)
+      states = self._mpc_xor(states, roundkeys, 2)
+
+    return
 
   # Simulate LowMC for all three players
   def run_mpc(self, t, tapes, tmp_view_raw):
@@ -248,16 +284,16 @@ class Picnic:
     
     # Init states by xor'ing plaintext and roundkeys
     states = self.mpc_xor_constant(states, self.__pub_key.p)
-    roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, 0)
-    states = self.mpc_xor(states, roundkeys)
+    roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, 0, 3)
+    states = self.mpc_xor(states, roundkeys, 3)
 
     for r in range(self.rounds):
 
       states = self.mpc_sbox(states, tapes, r, t)
-      states = self.lowmc.mpc_matrix_mul_lin(states, states, r)
+      states = self.lowmc.mpc_matrix_mul_lin(states, states, r, 3)
       states = self.lowmc.mpc_xor_rconsts(states, r)
-      roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, r + 1)
-      states = self.mpc_xor(states, roundkeys)
+      roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, r + 1, 3)
+      states = self.mpc_xor(states, roundkeys, 3)
 
     for i in range(3):
       self.__views[t][i].o_share = states[i]
@@ -320,16 +356,25 @@ class Picnic:
 
     return result
 
+  # MPC LowMC XOR constant verify
+  def mpc_xor_constant_verify(self, ins, constant, chal_trit):
+
+    if (chal_trit == 0):
+      ins[0] = ins[0] ^ constant
+    if (chal_trit == 2):
+      ins[1] = ins[1] ^ constant
+    return ins
+
   # MPC LowMC XOR a constant
   def mpc_xor_constant(self, ins, constant):
 
     ins[0] = ins[0] ^ constant
     return ins
 
-  # MPC LowMC XOR outs and ins for three players
-  def mpc_xor(self, outs, ins):
+  # MPC LowMC XOR outs and ins for all players
+  def mpc_xor(self, outs, ins, players):
 
-    for i in range(3):
+    for i in range(players):
       outs[i] = outs[i] ^ ins[i]
     return outs
 

@@ -13,20 +13,20 @@ picnic.generate_keys(p = p, priv_key = priv_key)
 # Create message and then sign it:
 # --------------------------------
 message = bytearray([0x01] * 500)
-# picnic.sign(message)
+picnic.sign(message)
 
 # Print, serialize and save the signature:
 # ----------------------------------------
-# picnic.print_signature()
-# picnic.serialize_signature()
-# picnic.write_ser_sig_to_file('signature.txt')
+picnic.print_signature()
+picnic.serialize_signature()
+picnic.write_ser_sig_to_file('signature.txt')
 
 # Read an write the ser sig again:
 # --------------------------------
 picnic.read_ser_sig_from_file('signature.txt')
 picnic.deserialize_signature()
-# picnic.serialize_signature()
-# picnic.write_ser_sig_to_file('signature_2.txt')
+picnic.serialize_signature()
+picnic.write_ser_sig_to_file('signature_2.txt')
 
 picnic.verify(message)
 
