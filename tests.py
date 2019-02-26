@@ -17,7 +17,7 @@ picnic.sign(message)
 
 # Print, serialize and save the signature:
 # ----------------------------------------
-picnic.print_signature()
+# picnic.print_signature()
 picnic.serialize_signature()
 picnic.write_ser_sig_to_file('signature.txt')
 
@@ -25,8 +25,8 @@ picnic.write_ser_sig_to_file('signature.txt')
 # --------------------------------
 picnic.read_ser_sig_from_file('signature.txt')
 picnic.deserialize_signature()
-picnic.serialize_signature()
-picnic.write_ser_sig_to_file('signature_2.txt')
+# picnic.serialize_signature()
+# picnic.write_ser_sig_to_file('signature_2.txt')
 
 picnic.verify(message)
 

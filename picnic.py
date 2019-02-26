@@ -157,7 +157,7 @@ class Picnic:
 
     for t in range(self.mpc_rounds):
 
-      # Create tapes[0..1]
+      print("MPC Round: " + str(t))
       tapes = []
       self.__tapes_pos = 0
 
@@ -218,17 +218,26 @@ class Picnic:
         self.__views[t][1].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
         tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
 
-      print("MPC Round: " + str(t))
-      print("Challenge: " + str(chal_trit))
-      print("Tape 0   : " + tapes[0].get_bitvector_in_hex().upper())
-      print("Tape 1   : " + tapes[1].get_bitvector_in_hex().upper())
-      print("iShare 0 : " + self.__views[t][0].i_share.get_bitvector_in_hex().upper())
-      print("iShare 1 : " + self.__views[t][1].i_share.get_bitvector_in_hex().upper())
-
       # Run MPC
       self.run_mpc_verify(t, tapes, tmp_view_raw, chal_trit)
 
-    return
+      # Calculate the commitments
+      self.mpc_commit_verify(t, chal_trit)
+
+      # Update outputs
+      outputs[t][chal_trit] = self.__views[t][0].o_share
+      outputs[t][(chal_trit + 1) % 3] = self.__views[t][1].o_share
+      outputs[t][(chal_trit + 2) % 3] = self.__views[t][0].o_share ^ \
+                                        self.__views[t][1].o_share ^ \
+                                        self.__pub_key.public_key
+
+    # Calculate challenges
+    self.__challenges = self.h3_verify(message, outputs)
+
+    if (self.__challenges == self.__signature.challenges):
+      print("Signature verified")
+    else:
+      print("Signature verification failed!")
 
   ##############################
   ###   LowMC MPC functions  ###
@@ -254,19 +263,14 @@ class Picnic:
 
     for r in range(self.rounds):
       
-      # Sbox
-
-      # matrix_mul_keys
+      states = self.mpc_sbox_verify(states, tapes, r, t)
       states = self.lowmc.mpc_matrix_mul_lin(states, states, r, 2)
-
-      # xor_constants
       states = self.lowmc.mpc_xor_rconsts_verify(states, r, chal_trit)
-
-      # xor roundkeys
       roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, r + 1, 2)
-      states = self._mpc_xor(states, roundkeys, 2)
+      states = self.mpc_xor(states, roundkeys, 2)
 
-    return
+    for i in range(2):
+      self.__views[t][i].o_share = states[i]
 
   # Simulate LowMC for all three players
   def run_mpc(self, t, tapes, tmp_view_raw):
@@ -303,6 +307,36 @@ class Picnic:
 
     return new_end_of_tmp_view
 
+  # MPC LowMC sbox for verifying
+  def mpc_sbox_verify(self, states, tapes, r, t):
+
+    a = (BitVector(intVal = 0, size = 3))
+    b = (BitVector(intVal = 0, size = 3))
+    c = (BitVector(intVal = 0, size = 3))
+    ab = (BitVector(intVal = 0, size = 3))
+    bc = (BitVector(intVal = 0, size = 3))
+    ca = (BitVector(intVal = 0, size = 3))
+
+    # Sbox'ing the first 3*self.sboxes bits for
+    # all three players
+    for i in range(0,(3 * self.sboxes),3):
+      
+      for j in range(2):
+        a[j] = states[j][i + 2]
+        b[j] = states[j][i + 1]
+        c[j] = states[j][i]
+
+      ab = self.mpc_and_verify(a, b, tapes, r, t)
+      bc = self.mpc_and_verify(b, c, tapes, r, t)
+      ca = self.mpc_and_verify(c, a, tapes, r, t)
+
+      for j in range(2):
+        states[j][i + 2] = a[j] ^ bc[j]
+        states[j][i + 1] = a[j] ^ b[j] ^ ca[j]
+        states[j][i]     = a[j] ^ b[j] ^ c[j] ^ ab[j]
+
+    return states
+
   # MPC LowMC sbox for signing
   def mpc_sbox(self, states, tapes, r, t):
 
@@ -332,6 +366,26 @@ class Picnic:
         states[j][i]     = a[j] ^ b[j] ^ c[j] ^ ab[j]
 
     return states
+
+  # MPC LowMC AND for verifying
+  def mpc_and_verify(self, in1, in2, tapes, r, t):
+
+    rand = BitVector(intVal = 0, size = 2)
+    rand[0] = tapes[0][self.__tapes_pos]
+    rand[1] = tapes[1][self.__tapes_pos]
+
+    result = BitVector(intVal = 0, size = 2)
+
+    result[0] = (in1[0] & in2[1]) ^ \
+                (in1[1] & in2[0]) ^ \
+                (in1[0] & in2[0]) ^ \
+                rand[0] ^ \
+                rand[1]
+    self.__views[t][0].transcript[self.__tapes_pos] = result[0]
+    result[1] = self.__views[t][1].transcript[self.__tapes_pos]
+    self.__tapes_pos += 1
+
+    return result
 
   # MPC LowMC AND for signing and updating the transcripts
   def mpc_and(self, in1, in2, tapes, r, t):
@@ -378,6 +432,34 @@ class Picnic:
       outs[i] = outs[i] ^ ins[i]
     return outs
 
+  # Calculate the commitments, the third one is given in the proof
+  def mpc_commit_verify(self, t, chal_trit):
+
+    self.__commitments[t][chal_trit].hash = self.mpc_h0(t, 0)
+    self.__commitments[t][(chal_trit + 1) % 3].hash = self.mpc_h0(t, 1)
+    self.__commitments[t][(chal_trit + 2) % 3].hash = self.__signature.proofs[t].view_3_commit
+
+  def mpc_h0(self, t, player):
+
+    # H4(seed[mpc_round][player])
+    shake128 = hashlib.shake_128()
+    shake128.update(bytes([0x04]))
+    if (player == 0):
+      shake128.update(bytes.fromhex(self.__signature.proofs[t].seed_1.get_bitvector_in_hex()))
+    if (player == 1):
+      shake128.update(bytes.fromhex(self.__signature.proofs[t].seed_2.get_bitvector_in_hex()))
+    h4 = shake128.digest(int(self.hash_length / 8))
+
+    # Calculate h0(h4, views[t])
+    shake128 = hashlib.shake_128()
+    shake128.update(bytes([0x00]))
+    shake128.update(h4)
+    shake128.update(bytes.fromhex(self.__views[t][player].i_share.get_bitvector_in_hex()))
+    shake128.update(bytes.fromhex(self.__views[t][player].transcript.get_bitvector_in_hex()))
+    shake128.update(bytes.fromhex(self.__views[t][player].o_share.get_bitvector_in_hex()))
+
+    return shake128.digest(int(self.hash_length / 8))
+
   # Calculate the commitments by hashing the 
   # seeds and views for all three players
   def mpc_commit(self, t):
@@ -423,6 +505,62 @@ class Picnic:
   ################################
   ###   Challenges and proofs  ###
   ################################
+  # Calculating the challenges in {0,1,2}*
+  def h3_verify(self, message, outputs):
+
+    shake128 = hashlib.shake_128()
+
+    # Hash the output shares with prefix 0x01
+    shake128.update(bytes([0x01]))    
+    for t in range(self.mpc_rounds):
+      for player in range(3):
+         shake128.update(bytes.fromhex(outputs[t][player].get_bitvector_in_hex()))
+    
+    # Hash the commitments
+    for t in range(self.mpc_rounds):
+      for player in range(3):
+         shake128.update(self.__commitments[t][player].hash)
+    
+    # Hash the circuit output
+    circuit_output = outputs[0][0] ^ outputs[0][1] ^ outputs[0][2]
+    shake128.update(bytes.fromhex(circuit_output.get_bitvector_in_hex()))
+
+    # Hash p (plaintext), salt and message to get the challenge from it
+    shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
+    shake128.update(bytes.fromhex(self.__signature.salt.get_bitvector_in_hex()))
+    shake128.update(message)
+
+    tmp_hash = shake128.digest(int(self.hash_length / 8))
+
+    tmp_bitvector = BitVector(rawbytes = tmp_hash)
+    bit_pos = 0
+    result = []
+
+    # Build the challenge in {0,1,2}* as a list.
+    # Each two bits in the hash become one element in the challenge-list
+    # until the challenge-list has the length of self.mpc_rounds.
+    # There can be re-calculating of the hash to reach that length.
+    while(1):
+      a = tmp_bitvector[bit_pos]
+      b = tmp_bitvector[bit_pos + 1]
+      if (a == 0 and b == 0):
+        result.append(0)
+      if (a == 0 and b == 1):
+        result.append(1)
+      if (a == 1 and b == 0):
+        result.append(2)
+      bit_pos += 2
+      if (len(result) >= self.mpc_rounds):
+        break
+      if (bit_pos >= self.hash_length):
+        shake128 = hashlib.shake_128()
+        shake128.update(bytes([0x01]))
+        shake128.update(tmp_hash)
+        tmp_hash = shake128.digest(int(self.hash_length / 8))
+        tmp_bitvector = BitVector(rawbytes = tmp_hash)
+        bit_pos = 0
+  
+    return result
 
   # Calculating the challenges in {0,1,2}*
   def h3(self, message):
