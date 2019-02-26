@@ -1,4 +1,4 @@
-\documentclass[twoside]{article}
+\documentclass[]{article}
 
 % ------
 % Fonts and typesetting settings
@@ -10,7 +10,7 @@
 
 % ------
 % Page layout
-\usepackage[hmarginratio=1:1,top=32mm,bottom=40mm,columnsep=20pt]{geometry}
+\usepackage[hmarginratio=1:1,top=30mm,bottom=30mm,columnsep=20pt]{geometry}
 \usepackage[font=it]{caption}
 \usepackage{paralist}
 %\usepackage{multicol}
@@ -48,7 +48,7 @@
 	\pagestyle{fancy}
 	\fancyhead{}
 	\fancyfoot{}
-	\fancyhead[C]{Post-qunatum cryptography $\bullet$ Winter 2018/19 $\bullet$ University of applied science RheinMain}
+	\fancyhead[C]{Post-quantum cryptography $\bullet$ Winter 2018/19 $\bullet$ RheinMain University of Applied Sciences}
 	\fancyfoot[RO,LE]{\thepage}
 
 
@@ -61,8 +61,9 @@
 \author{%
 	\large
 	\textsc{Thorsten Knoll} \\[2mm]
-	\normalsize	info@thorstenknoll.de
-	\vspace{-5mm}
+	\normalsize	info@thorstenknoll.de \\[2mm]
+	\normalsize March, 2019
+	%\vspace{-5mm}
 	}
 \date{}
 
@@ -76,13 +77,15 @@
 \maketitle
 \thispagestyle{fancy}
 
-\begin{abstract}
-\noindent Abstract goes here
-\end{abstract}
+%\begin{abstract}
+%\noindent Abstract goes here
+%\end{abstract}
 
-\section{Section A}
-\subsection{Subsection}
-Here should be the first content.
+\section{Introduction}
+\subsection{Post-quantum cryptography, NIST and Picnic}
+Quantum computers are experiencing fast development and seem to be available within a timeframe of the next few decades. One of their properties will be to break huge parts of modern cryptography. Especially the discrete logarithm and prime-factorisation loose their trapdoor funcionality in regards to the efficient quantum algorithms from Grover and Shor. Therefore the need for new cryptographic algorithms arises, beeing save in regards to the availability of quantum computers. This field of research goes with the name "Post-quantum cryptography" (PQC). The american National Institute of Standards and Technology (NIST) called out a challenge to find the next PQC standards. This challenge is in round two of three at the time of writing this document. 69 submissions from round one were reduced to 26 candidates in round two of the challenge. These 26 candidates got announced by NIST not long ago at the end of january 2019. One of the submissions surviving the first round is the Picnic signaturescheme.
+\subsection{Evaluation and categorization}
+\subsection{Learning PQC}
 \begin{figure}[htbp]
 \center
 \includegraphics[width=0.5\textwidth]{pics/dummy.pdf}
@@ -91,8 +94,8 @@ Here should be the first content.
 \end{figure}
 \newpage
 
-\section{Section B}
-Second page test.
+\section{LowMC}
+\section{Picnic}
 
 \bibliographystyle{unsrt}
 \bibliography{}
