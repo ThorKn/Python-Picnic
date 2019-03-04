@@ -168,7 +168,40 @@ The code is tested with Ubuntu 16.04 LTS and Python3.6. The package "BitVector" 
 \texttt{<myvenv>pip install BitVector}\\
 \texttt{<myvenv>python test\_lowmc.py}\\
 \section{Picnic}
-
+\subsection{Components}
+Picnic is a Post-quantum signature scheme that does not rely on hard number theoretical problems like discrete logarithm or prime-factorization. Instead Picnice embedds symmetric cryptographic primitves into a zero-knowledge proof system. The components of Picnic are:
+\begin{itemize}
+\item{A blockcipher (LowMC)}
+\item{A Hashfunktion (SHA3-SHAKE)}
+\item{A Zero-knowledge proof system (ZKB++)}
+\end{itemize}
+LowMC is discussed earlier in this document. It is a parametric blockcipher algorithm that simulates a gatebased (XOR, AND in GF2) electrical circuit from input to output with low AND-gate counts. The Python-LowMC implementation will be used for Picnic. SHA3-SHAKE will not be discussed in detail in this document. It is a NIST-standardized Hashalgorithm, based on the Spongeconstruction with an arbitrary output length. In Picnic SHA3-SHAKE is used as a Hashfunction as well as a Key-Derivation-Function (KDF). Python-Picnic uses the Python library \texttt{hashlib} whereever SHA3-SHAKE is needed\\ \\
+That leaves the zero-knowledge proof system ZKB++ to explain. The following descriptions are on a very abstract level and will not explain every detail. Instead we'll focus on getting a broad overview of the functionality to learn the key points of the implementation. Most of the following examples are based on the documentations and presentations of the Picnic research team  \footnote{\url{https://www.youtube.com/watch?v=_J9ESIy8D2o}} \footnote{\url{https://asiacrypt.iacr.org/2018/files/SLIDES/TUESDAY/Z411/post\%20quantum\%20signatures\%20-\%20asiacrypt18v2.pdf}}.
+\subsection{Proof of knowledge: The $\Sigma$ - Protocol}
+Zero-knowledge proofs are based on the $\Sigma$-protocol, but with the twist to transmitt no parts of the underlying secret anywhere in the communication. The basic $\Sigma$-Protocol is a communication scheme between two parties as in figure \ref{fig:sigma}. A prover wants to convince a verifier about the knowledge of a secret. 
+\begin{figure}[htbp]
+\center
+\includegraphics[width=0.5\textwidth]{pics/sigma.pdf}
+\caption{$\Sigma$-Protocol scheme}
+\label{fig:sigma}
+\end{figure}\\
+To prove this knowledge, a 3-way communication is held. A classic example for the $\Sigma$-Protocol is the Schnorr protocol. It is based on the discrete logarithm. The prover knows a secret $x$ so that $y=g^{x}$ with $g$ beeing a generator in a cyclic group $G_{p}$ with the order $p$. The messages in the Schnorr protocol are:
+\begin{itemize}
+\item{Commitment: Prover chooses a random $r$ and commits $t = g^{r}$ and $y$.}
+\item{Challenge: Verifier chooses a random $c$ and sends it to the prover.}
+\item{Response: Prover sends $s = r + cx$.}
+\end{itemize}
+The verifier accepts, if $ty^{c} = g^{s}$. Because:
+\[ty^{c} = g^{r}y^{c} = g^{r}g^{cx} = g^{r + cx} = g^{s}\]
+Inserted into the sequence diagramm above, this communication wourld look like figure \ref{fig:schnorr}.
+\begin{figure}[htbp]
+\center
+\includegraphics[width=0.5\textwidth]{pics/schnorr.pdf}
+\caption{Schnorr protocol}
+\label{fig:schnorr}
+\end{figure}\\
+\subsection{Zero-knowledge proof: LowMC in ZKB++}
+In the next step towards ZKB++ we'll look into how LowMC works as the One-way-function inside a $\Sigma$-protocol. Additionaly the property of zero-knowledge in the proof is shown. The example is quite simplistic and does not fulfill every aspect of ZKB++. But it should give an oversight of the needed variables and the general communication scheme.\\ \\
 \bibliographystyle{unsrt}
 \bibliography{}
 
