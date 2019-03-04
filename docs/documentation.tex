@@ -193,7 +193,7 @@ To prove this knowledge, a 3-way communication is held. A classic example for th
 \end{itemize}
 The verifier accepts, if $ty^{c} = g^{s}$. Because:
 \[ty^{c} = g^{r}y^{c} = g^{r}g^{cx} = g^{r + cx} = g^{s}\]
-Inserted into the sequence diagramm above, this communication wourld look like figure \ref{fig:schnorr}.
+Inserted into the sequence diagramm above, this communication would look like figure \ref{fig:schnorr}.
 \begin{figure}[htbp]
 \center
 \includegraphics[width=0.5\textwidth]{pics/schnorr.pdf}
@@ -202,6 +202,19 @@ Inserted into the sequence diagramm above, this communication wourld look like f
 \end{figure}\\
 \subsection{Zero-knowledge proof: LowMC in ZKB++}
 In the next step towards ZKB++ we'll look into how LowMC works as the One-way-function inside a $\Sigma$-protocol. Additionaly the property of zero-knowledge in the proof is shown. The example is quite simplistic and does not fulfill every aspect of ZKB++. But it should give an oversight of the needed variables and the general communication scheme.\\ \\
+Imagine LowMC as a electronic circuit of XOR and AND gates as in the example in figure \ref{fig:circuit}. There are inputs ($x_{1..8}$) and outputs ($y_{1..6}$) from the circuit. The function of this LowMC circuit could be $f_{LowMC}(x) = y$. For given inputs the outputs can be calculated efficiently. For given outputs there is no efficient algorithm to determine the inputs. That is a hard to reverse function.\\
+\begin{figure}[htbp]
+\center
+\includegraphics[width=0.69\textwidth]{pics/circuit.pdf}
+\caption{A LowMC circuit as a One-way-function}
+\label{fig:circuit}
+\end{figure}\\
+Back to the terms of the $\Sigma$-protocol we can define the following sentence:
+\begin{center}
+\textit{A prover has knowledge of a secret key (inputs $x$) that computes with\\
+the LowMC cicruit (One-way-function) to a public key (outputs $y$).}
+\end{center}
+
 \bibliographystyle{unsrt}
 \bibliography{}
 
