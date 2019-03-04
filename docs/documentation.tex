@@ -176,7 +176,7 @@ Picnic is a Post-quantum signature scheme that does not rely on hard number theo
 \item{A Zero-knowledge proof system (ZKB++)}
 \end{itemize}
 LowMC is discussed earlier in this document. It is a parametric blockcipher algorithm that simulates a gatebased (XOR, AND in GF2) electrical circuit from input to output with low AND-gate counts. The Python-LowMC implementation will be used for Picnic. SHA3-SHAKE will not be discussed in detail in this document. It is a NIST-standardized Hashalgorithm, based on the Spongeconstruction with an arbitrary output length. In Picnic SHA3-SHAKE is used as a Hashfunction as well as a Key-Derivation-Function (KDF). Python-Picnic uses the Python library \texttt{hashlib} whereever SHA3-SHAKE is needed\\ \\
-That leaves the zero-knowledge proof system ZKB++ to explain. The following descriptions are on a very abstract level and will not explain every detail. Instead we'll focus on getting a broad overview of the functionality to learn the key points of the implementation. Most of the following examples are based on the documentations and presentations of the Picnic research team  \footnote{\url{https://www.youtube.com/watch?v=_J9ESIy8D2o}} \footnote{\url{https://asiacrypt.iacr.org/2018/files/SLIDES/TUESDAY/Z411/post\%20quantum\%20signatures\%20-\%20asiacrypt18v2.pdf}}.
+That leaves the zero-knowledge proof system ZKB++ to explain. The following descriptions are on a very abstract level and will not explain every detail. Instead we'll focus on getting a broad overview of the functionality to learn the key points of the implementation. Most of the following examples are based on the documentations and presentations of the Picnic research team \footnote{\url{https://asiacrypt.iacr.org/2018/files/SLIDES/TUESDAY/Z411/post\%20quantum\%20signatures\%20-\%20asiacrypt18v2.pdf}}.
 \subsection{Proof of knowledge: The $\Sigma$ - Protocol}
 Zero-knowledge proofs are based on the $\Sigma$-protocol, but with the twist to transmitt no parts of the underlying secret anywhere in the communication. The basic $\Sigma$-Protocol is a communication scheme between two parties as in figure \ref{fig:sigma}. A prover wants to convince a verifier about the knowledge of a secret. 
 \begin{figure}[htbp]
@@ -199,9 +199,9 @@ Inserted into the sequence diagramm above, this communication would look like fi
 \includegraphics[width=0.5\textwidth]{pics/schnorr.pdf}
 \caption{Schnorr protocol}
 \label{fig:schnorr}
-\end{figure}\\
-\subsection{Zero-knowledge proof: LowMC in ZKB++}
-In the next step towards ZKB++ we'll look into how LowMC works as the One-way-function inside a $\Sigma$-protocol. Additionaly the property of zero-knowledge in the proof is shown. The example is quite simplistic and does not fulfill every aspect of ZKB++. But it should give an oversight of the needed variables and the general communication scheme.\\ \\
+\end{figure}
+\subsection{LowMC in ZKB++}
+In the next step towards ZKB++ we'll look into how LowMC works as the One-way-function inside a $\Sigma$-protocol.\\ \\
 Imagine LowMC as a electronic circuit of XOR and AND gates as in the example in figure \ref{fig:circuit}. There are inputs ($x_{1..8}$) and outputs ($y_{1..6}$) from the circuit. The function of this LowMC circuit could be $f_{LowMC}(x) = y$. For given inputs the outputs can be calculated efficiently. For given outputs there is no efficient algorithm to determine the inputs. That is a hard to reverse function.\\
 \begin{figure}[htbp]
 \center
@@ -209,12 +209,24 @@ Imagine LowMC as a electronic circuit of XOR and AND gates as in the example in 
 \caption{A LowMC circuit as a One-way-function}
 \label{fig:circuit}
 \end{figure}\\
-Back to the terms of the $\Sigma$-protocol we can define the following sentence:
+Thinking in terms of the $\Sigma$-protocol we can define the following sentence:
 \begin{center}
 \textit{A prover has knowledge of a secret key (inputs $x$) that computes with\\
 the LowMC cicruit (One-way-function) to a public key (outputs $y$).}
 \end{center}
-
+\subsection{MPC and the zero-knowledge proof} 
+The zero-knowledge proof system ZKB++ is based on Multi-Party-Computation (MPC). MPC means that the prover from the $\Sigma$-protocol is splitted into different players. For ZKB++ the number of players is fixed to three. To get a grip of how MPC and the zero-knowledge property works, we'll look into an example from Melissa Chase from the Picnic research team (figure \ref{fig:mpc}. She presented this example at RealWorldCrypto 2018 and the talk is public available as a video\footnote{\url{https://www.youtube.com/watch?v=_J9ESIy8D2o}}.\\ \\
+A prover knows the secrets $a$ and $b$. The function $f$ shall be the very simple circuit $c=a\oplus c$, where $\oplus$ is an XOR. Let $H$ be a cryptographic secure Hashfunction (i.e. SHA3-SHAKE). This example is designed for two players, instead of the three players in ZKB++.\\
+\begin{figure}[htbp]
+\center
+\includegraphics[width=0.9\textwidth]{pics/mpc2player.pdf}
+\caption{MPC with two players}
+\label{fig:mpc}
+\end{figure}\\
+It is easy to recognize the $\Sigma$-protcol in this MPC by the message scheme of "commitment", "challenge" and "response". The differences are that now two players are involved on the prover side. Both have their input- and output shares and the challenge determines which players input shares get revealed. The verifier can then check if the revealed player had a valid input share of the secrets $a$ and $b$ and therefore is convinced about the provers knowledge of the secrets by a probability of 50\% (one of two players). This can be repeated $n$ times till the wanted probability (defined by the security level) is reached. The probability calculates to $p = (1/2)^{n}$. As the function $f$ is assumed to be "hard to reverse", nothing about the secrets $a$ and $b$ got learned. That is the zero-knowledge part of the proof.
+\subsection{MPC "in the head"}
+\subsection{The Picnic loops}
+\subsection{Keys, Message and Signature}
 \bibliographystyle{unsrt}
 \bibliography{}
 
