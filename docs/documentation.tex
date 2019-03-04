@@ -224,7 +224,7 @@ A prover knows the secrets $a$ and $b$. The function $f$ shall be the very simpl
 \label{fig:mpc}
 \end{figure}\\
 It is easy to recognize the $\Sigma$-protcol in this MPC by the message scheme of "commitment", "challenge" and "response". The differences are that now two players are involved on the prover side. Both have their input- and output shares and the challenge determines which players input shares get revealed. The verifier can then check if the revealed player had a valid input share of the secrets $a$ and $b$ and therefore is convinced about the provers knowledge of the secrets by a probability of 50\% (one of two players). This can be repeated $n$ times till the wanted probability (defined by the security level) is reached. The probability calculates to $p = (1/2)^{n}$. As the function $f$ is assumed to be "hard to reverse", nothing about the secrets $a$ and $b$ got learned. That is the zero-knowledge part of the proof.
-\subsection{MPC "in the head"}
+\subsection{MPC "in the head" and Random oracle models}
 \subsection{The Picnic loops}
 \subsection{Keys, Message and Signature}
 \bibliographystyle{unsrt}
