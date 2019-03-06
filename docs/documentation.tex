@@ -230,7 +230,7 @@ Some remarks about the differences between this example and the MPC in Picnic ne
 \item{LowMC has AND gates. This makes dividing the shares more complicated.}
 \item{ZKB++ has three players instead of two. The secrets have to be shared by three.}
 \item{The cheating probability increases to $2/3$. Confidence probability is $p=(1/3)^n$.}
-\item{Challenges request two players to be revealed with $e \in \{0,1,2\}$.}
+\item{Challenges request one of three players to be revealed with $e \in \{0,1,2\}$.}
 \item{The lowest security level in Picnic has $n = 219$ MPC rounds.}
 \end{itemize} 
 \subsection{MPC in the head and Random oracle models}
@@ -243,20 +243,39 @@ The round-commitments contain randomness (input shares) and are calculated and c
 \includegraphics[width=0.7\textwidth]{pics/challenges.pdf}
 \caption{Hashes to challenges}
 \label{fig:challenges}
-\end{figure}\\
+\end{figure}\\ \\
 Picnic has two different versions of MPC in the head defined. The first one is the Fiat-Shamir (FS) transformation, which is based on the described ROM but might not be quantum save. The second option is the Unruh (UR) transformation, which is based on a Quantum Random Oracle Model (QROM). The re-implementation Python-Picnic can only handle the FS transformation so far. 
-\subsection{The Picnic loops}
-All the described parts taken together assemble to the Picnic signaturescheme. Picnic consists mainly of two big loops, shown in figure \ref{fig:mainloops}.
+\subsection{Signing a message: The Picnic loops}
+All the described parts taken together assemble to the Picnic signaturescheme. Picnic consists mainly of two big loops, shown in figure \ref{fig:mainloops} for creating a signature (signing a message).
 \begin{figure}[htbp]
 \center
 \includegraphics[width=0.5\textwidth]{pics/mainloops.pdf}
-\caption{Picnic loops}
+\caption{Signing a message: Picnic loops}
 \label{fig:mainloops}
 \end{figure}\\
 \subsection{Keys, Message and Signature}
-\bibliographystyle{unsrt}
-\bibliography{}
-
-
+Picnic works with keypairs for signing and verifying as every other public key cryptographic algorithm. In figure \ref{fig:mainloops} the parts are marked, where the keys and the message to sign is used. The generation of the keypair is done with the LowMC encryption. A random plaintext message is needed to do this. The lengths of the keys and the plaintext are defined through the security level. Therefore the \textbf{key generation} is:
+\begin{itemize}
+\item{Pick a random private key $sk$ (secret key).}
+\item{Pick a random plaintext message $p$ (Not to confound with the message to sign).}
+\item{Compute the encryption of $p$ with $sk$: $C = LowMC(sk, p)$.}
+\item{The public key is the tuple $pk = (C,p) = (LowMC(sk,p), p)$.}
+\end{itemize}
+The \textbf{message $M$} to be signed must be an arbitrary bytearray of the length $1 \leq \vert M  \vert \leq 2^{55}$. The messsage takes account into the creation of the challenges. In the description of "MPC in the head" above, this was not explained to keep things as simple as possible. But in the Picnic signaturescheme the challenges depend on the commitments, the output shares \textbf{and} the message $M$.\\ \\
+The Picnic signing function is defined as:
+\[signature\text{ }\delta = picnic\_sign(sk, pk, M)\]
+The resulting \textbf{signature $\delta$} can be understood as a transcript of the complete communication in the MPC protocol. The signature in Picnic includes:
+\begin{itemize}
+\item{The challenges for all MPC rounds.}
+\item{The player revelations according to the challenges (transcripts, seeds and input shares). Remark: Only one player gets revealed per MPC round.}
+\item{The commitments of the player according to the challenges. Remark: Only one players commitment gets revealed per MPC round.}
+\end{itemize}
+\textbf{LowMc and the signature sizes:}\\
+At the beginning of the LowMC description it was said, that LowMC was chosen because it reduces the signature sizes in Picnic, compared to other blockcipher algorithms. The argumentation was, that the low count of AND gates does this. In figure \ref{fig:mainloops} can be seen that the transcript of the LowMC rounds are done in the sbox-part of the algorithm. And only the calculations from the AND gates get recorded as a transcript. That is the point where Picnic takes advantage of LowMC to minimize the size of the signatures.
+\subsection{Variables in the implementation}
+\subsection{Verify a Picnic signature}
+\subsection{The API to Python-Picnic}
+%\bibliographystyle{unsrt}
+%\bibliography{}
 
 \end{document}
