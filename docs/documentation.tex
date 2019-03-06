@@ -271,8 +271,56 @@ The resulting \textbf{signature $\delta$} can be understood as a transcript of t
 \item{The commitments of the player according to the challenges. Remark: Only one players commitment gets revealed per MPC round.}
 \end{itemize}
 \textbf{LowMc and the signature sizes:}\\
-At the beginning of the LowMC description it was said, that LowMC was chosen because it reduces the signature sizes in Picnic, compared to other blockcipher algorithms. The argumentation was, that the low count of AND gates does this. In figure \ref{fig:mainloops} can be seen that the transcript of the LowMC rounds are done in the sbox-part of the algorithm. And only the calculations from the AND gates get recorded as a transcript. That is the point where Picnic takes advantage of LowMC to minimize the size of the signatures.
-\subsection{Variables in the implementation}
+At the beginning of the LowMC description it was said, that LowMC was chosen because it reduces the signature sizes in Picnic, compared to other blockcipher algorithms. The argumentation was, that the low count of AND gates does this. In figure \ref{fig:mainloops} can be seen that the transcripts of the LowMC rounds are done in the sbox-part of the algorithm. And only the calculations from the AND gates get recorded as a transcript. That is the point where Picnic takes advantage of LowMC to minimize the size of the signatures.
+\subsection{Types and variables in the implementation}
+With the given explanations about the Picnic algorithm it should be not that hard to understand the Python sourcecode. The functions mostly map directly to the explanations. Instead of describing all functions in detail, an affiliation of the code-variables to the examples above will be given. We'll start with the public variables in table \ref{tab:secparams} defined through the security level of Picnic. If Python-Picnic would support more security levels (only L1 at the moment), the constructor would set these variables according to them. Supporting more security levels is implemented in Python-LowMC and it can be seen there, as an example how to implement this feature.\newpage
+\begin{table}[htbp]
+\begin{center}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Variable}  & \textbf{Description} \\ \hline
+self.blocksize  &  Internal blocksize of LowMC in bits (also statesize)\\ \hline
+self.blocksize\_bytes  &  Internal blocksize of LowMC in bytes\\ \hline
+self.keysize  &  Lenght of private and public key in bits\\ \hline
+self.rounds  &  Number of LowMC rounds\\ \hline
+self.sboxes  &  Number of 3-Bit sboxes in LowMC\\ \hline
+self.mpc\_rounds  &  Number of MPC rounds\\ \hline
+self.hash\_length  &  Lenght of the SHAKE ouput as hashfunction in bits\\ \hline
+self.lowmc  &  Name of the security level as string\\ \hline
+\end{tabular}
+\caption{Public variables}
+\label{tab:secparams}
+\end{center}
+\end{table}
+\noindent Before the private variables, we'll declare the implementation specific types (datastructures) and describe them in table \ref{tab:types}. They are defined in an own file, named \texttt{picnic\_types.py}. All the types are classes with only a constructor and some variables. Imagine them like C structs.
+\begin{table}[htbp]
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Class}  & \textbf{Variables} & \textbf{Description} \\ \hline
+Publickey & self.public\_key & Public key as bytearray \\
+		  & self.p			  & Plaintext message for public key generation \\ \hline
+View	  & self.i\_share     & Single input share as a BitVector of length blocksize \\ 
+		  & self.transcript  & Single transcript of a LowMC round as a BitVector\\
+		  &					  & of length = AND gates in one LowMC round\\
+		  & self.o\_share     & Single output share as BitVector of length blocksize (state)\\ \hline
+Commit-   & self.hash       & Hash of a single commitment as a bytearray\\
+ment      &                 & of length = self.hash\_length \\
+		  & self.n\_commitments & Not used by now \\ \hline
+Proof     & self.seed\_1  & Seed of the first not revealed player in a round\\
+		  & self.seed\_2  & Seed of the second not revealed player in a round\\
+		  & self.i\_share & Input share of the revealed player in a round\\
+		  & self.transcript & Transcript of the AND gates of the revealed player\\
+		  & self.view\_3\_commit & A merged commit of the three players (to save space)\\ \hline
+Signature & self.proofs & List of Proofs (class Proof), length = self.mpc\_rounds\\
+		  & self.challenges & List of all challenges, length = self.mpc\_rounds\\
+		  & self.salt & Salt as bytearray, length = self.blocksize\\ \hline
+\end{tabular}
+\caption{Picnic types (classes)}
+\label{tab:types}
+\end{center}
+\end{table}
+
 \subsection{Verify a Picnic signature}
 \subsection{The API to Python-Picnic}
 %\bibliographystyle{unsrt}
