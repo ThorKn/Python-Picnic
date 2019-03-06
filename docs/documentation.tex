@@ -234,9 +234,25 @@ Some remarks about the differences between this example and the MPC in Picnic ne
 \item{The lowest security level in Picnic has $n = 219$ MPC rounds.}
 \end{itemize} 
 \subsection{MPC in the head and Random oracle models}
-The zero-knowledge proof we've discussed so far is interactive. The verifier picks random challenges and sends them to the prover. It is wanted to calculate the proof without the need for an "external" source of randomness. This is called "MPC in the head" and reduces the proof to a non-interactive version. It wouldn't be a secure idea to let the prover choose the challenges on his own. The prover then could simply pick the challenge that favours him. A proveable solution to this is to use a "Random Oracle Model" (ROM) on the provers side to generate the challenges. In ZKB++ this is done with the cryptographic secure hashfunction SHA3-SHAKE. The commitments from each MPC round gets hashed and the challenges are extracted from this hash bitwise. In the example above (figure \ref{fig:mpc}) this would be the hash of $h_1, h_2, c_1, c_2$.\\ \\
-Picnic has two different versions of MPC in the head implemented. The first one is the Fiat-Shamir (FS) transformation, which is based on the described ROM but might not be quantum save. The second option is the Unruh (UR) transformation, which is based on a Quantum Random Oracle Model (QROM). The re-implementation Python-Picnic can only handle the FS transformation so far. 
+The zero-knowledge proof we've discussed so far is interactive between the prover and the verifier. The communication in the $\Sigma$-protocol defines the verifier as a secure source of randomness for the challenges. The prover must not be able to guess in advance what the challenge will be.\\ \\ 
+For a signaturescheme it is wanted to calculate the proof without the need for an "external" source of randomness. The signatures shall be created and verified on a single machine without the counterpart of the verifier in the communication. This is called "MPC in the head", reduces the proof to a non-interactive version and is used in ZKB++. It wouldn't be a secure idea to let the prover choose the challenges on his own. The prover then could simply pick the challenge that favours him. A proveable secure solution to this is to use a "Random Oracle Model" (ROM) on the provers side to generate the challenges. In ZKB++ this is done with the cryptographic secure hashfunction SHA3-SHAKE. The output of SHA3-SAHKE is the source of randomness under the premise of the ROM and fulfills all the needed properties for secure random numbers.\\ \\
+The concrete implementation looks like this:\\
+The round-commitments contain randomness (input shares) and are calculated and commited before the start of the protocol. To get the challenges, the commitments from each MPC round gets hashed. In the example above (figure \ref{fig:mpc}) this would be the hash of $h_1, h_2, c_1, c_2$. The challenges then are extracted from this hash bitwise (figure \ref{fig:challenges}). Each two bits from the hash are transformed to a single challenge $e \in \{0,1,2\}$ for a three party MPC. And there we see the reason for using a hashfunction with arbitrary output lengths (SHA3-SHAKE). The needed length of this hash depends on the number of MPC rounds $n$ (security level L1: $n=219$) as every MPC round has it's own challenge.\\
+\begin{figure}[htbp]
+\center
+\includegraphics[width=0.7\textwidth]{pics/challenges.pdf}
+\caption{Hashes to challenges}
+\label{fig:challenges}
+\end{figure}\\
+Picnic has two different versions of MPC in the head defined. The first one is the Fiat-Shamir (FS) transformation, which is based on the described ROM but might not be quantum save. The second option is the Unruh (UR) transformation, which is based on a Quantum Random Oracle Model (QROM). The re-implementation Python-Picnic can only handle the FS transformation so far. 
 \subsection{The Picnic loops}
+All the described parts taken together assemble to the Picnic signaturescheme. Picnic consists mainly of two big loops, shown in figure \ref{fig:mainloops}.
+\begin{figure}[htbp]
+\center
+\includegraphics[width=0.5\textwidth]{pics/mainloops.pdf}
+\caption{Picnic loops}
+\label{fig:mainloops}
+\end{figure}\\
 \subsection{Keys, Message and Signature}
 \bibliographystyle{unsrt}
 \bibliography{}
