@@ -292,20 +292,22 @@ self.lowmc  &  Name of the security level as string\\ \hline
 \label{tab:secparams}
 \end{center}
 \end{table}
-\noindent Before the private variables, we'll declare the implementation specific types (datastructures) and describe them in table \ref{tab:types}. They are defined in an own file, named \texttt{picnic\_types.py}. All the types are classes with only a constructor and some variables. Imagine them like C structs.
+\noindent Before the private variables, we'll declare the implementation specific types (datastructures) and describe them in table \ref{tab:types}. They are defined in an own file, named \texttt{picnic\_types.py}. All the types are classes with only a constructor and some variables. Imagine them like C structs.\\
 \begin{table}[htbp]
 \begin{center}
 \begin{tabular}{|l|l|l|}
 \hline
 \textbf{Class}  & \textbf{Variables} & \textbf{Description} \\ \hline
-Publickey & self.public\_key & Public key as bytearray \\
-		  & self.p			  & Plaintext message for public key generation \\ \hline
-View	  & self.i\_share     & Single input share as a BitVector of length blocksize \\ 
-		  & self.transcript  & Single transcript of a LowMC round as a BitVector\\
-		  &					  & of length = AND gates in one LowMC round\\
-		  & self.o\_share     & Single output share as BitVector of length blocksize (state)\\ \hline
-Commit-   & self.hash       & Hash of a single commitment as a bytearray\\
-ment      &                 & of length = self.hash\_length \\
+Publickey & self.public\_key & Public key as BitVector, length = self.keysize \\
+		  & self.p			  & Plaintext message for public key generation as BitVector, \\
+		  &					  & length =  self.keysize\\ \hline
+View	  & self.i\_share     & Single input share as a BitVector, length = self.blocksize \\ 
+		  & self.transcript  & Single transcript of a LowMC round as a BitVector,\\
+		  &					  & length = AND gates in one LowMC round\\
+		  & self.o\_share     & Single output share as BitVector, \\
+		  &                   & length = self.blocksize \\ \hline
+Commit-   & self.hash       & Hash of a single commitment as a bytearray,\\
+ment      &                 & length = self.hash\_length \\
 		  & self.n\_commitments & Not used by now \\ \hline
 Proof     & self.seed\_1  & Seed of the first not revealed player in a round\\
 		  & self.seed\_2  & Seed of the second not revealed player in a round\\
@@ -319,8 +321,35 @@ Signature & self.proofs & List of Proofs (class Proof), length = self.mpc\_round
 \caption{Picnic types (classes)}
 \label{tab:types}
 \end{center}
+\end{table}\\
+\noindent Now, with the knowledge about the types (classes) we can define the private variables. They mostly store the informations from the MPC rounds for every player (three of them). Therefore the views, commitments and seeds are two-dimensional arrays with the first dimension beeing the MPC rounds and the second dimension beeing the three players. Python does not have datatypes for arrays. They are nested lists, but can be accessed in the same way as arrays in other languages by bracket-notations ([dim 1][dim 2]). The private variables are described in table \ref{tab:privvars}.
+\begin{table}[htbp]
+\begin{center}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Variable}  & \textbf{Description} \\ \hline
+self.\_\_priv\_key    & Private key as BitVector, length = self.keysize\\ \hline
+self.\_\_pub\_key     & Public key as type Publickey (class)\\ \hline  
+self.\_\_views        & Two-dimensional array of Views (class)\\
+			          & dims: [self.mpc\_rounds][3 (players)]\\ \hline
+self.\_\_commitments  & Two-dimensional array of Commitments (class)\\
+					  & dims: [self.mpc\_rounds][3 (players)] \\ \hline
+self.\_\_seeds 		  & Two-dimensional array of seeds as BitVectors.\\
+			          & Each BitVector has length = self.blocksize\\ 
+			          & dims: [self.mpc\_rounds][3 (players)] \\ \hline
+self.\_\_salt  		  & Salt as a BitVector, length = self.blocksize\\ \hline
+self.\_\_tapes\_pos  & Position counter on the tapes. Type = Integer\\ \hline
+self.\_\_challenges  & List of the challenges $e \in \{0,1,2\}$,\\
+					  & length = self.mpc\_rounds \\ \hline
+self.\_\_prove       & List of Proofs (class), length = self.mpc\_rounds\\ \hline
+self.\_\_signature   & Stores the complete Signature (class),\\
+					  & including proofs, challenges and salt \\ \hline
+self.\_\_signature\_ser & Stores a serialized signature as bytearray\\ \hline
+\end{tabular}
+\caption{Private variables}
+\label{tab:privvars}
+\end{center}
 \end{table}
-
 \subsection{Verify a Picnic signature}
 \subsection{The API to Python-Picnic}
 %\bibliographystyle{unsrt}
