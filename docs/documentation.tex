@@ -215,7 +215,7 @@ Thinking in terms of the $\Sigma$-protocol we can define the following sentence:
 the LowMC cicruit (One-way-function) to a public key (outputs $y$).}
 \end{center}
 \subsection{MPC and the zero-knowledge proof} 
-The zero-knowledge proof system ZKB++ is based on Multi-Party-Computation (MPC). MPC means that the prover from the $\Sigma$-protocol is splitted into different players. For ZKB++ the number of players is fixed to three. To get a grip of how MPC and the zero-knowledge property works, we'll look into an example from Melissa Chase from the Picnic research team (figure \ref{fig:mpc}. She presented this example at RealWorldCrypto 2018 and the talk is public available as a video\footnote{\url{https://www.youtube.com/watch?v=_J9ESIy8D2o}}.\\ \\
+The zero-knowledge proof system ZKB++ is based on Multi-Party-Computation (MPC). MPC means that the prover from the $\Sigma$-protocol is splitted into different players. For ZKB++ the number of players is fixed to three. To get a grip of how MPC and the zero-knowledge property works, we'll look into an example from Melissa Chase from the Picnic research team (figure \ref{fig:mpc}). She presented this example at RealWorldCrypto 2018 and the talk is public available as a video\footnote{\url{https://www.youtube.com/watch?v=_J9ESIy8D2o}}.\\ \\
 A prover knows the secrets $a$ and $b$. The function $f$ shall be the very simple circuit $c=a\oplus c$, where $\oplus$ is an XOR. Let $H$ be a cryptographic secure Hashfunction (i.e. SHA3-SHAKE). This example is designed for two players, instead of the three players in ZKB++.\\
 \begin{figure}[htbp]
 \center
