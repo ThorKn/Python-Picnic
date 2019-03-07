@@ -22,7 +22,6 @@ pip install BitVector
 ```
 ## Documentation
 This repository contains a description of the implementation as PDF in the /docs folder.
-## Usage
 ## Tests
 To run the tests with a testvector, simply execute
 ```
