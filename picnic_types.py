@@ -1,3 +1,15 @@
+'''
+---------------------------------------------------
+Picnic typeclasses in Python
+Author: Thorsten Knoll
+Date: March 2019
+
+This file is part of the Python-Picnic 
+implementation and is published under MIT Licence. 
+See the LICENCE.md file.
+---------------------------------------------------
+'''
+
 from BitVector import BitVector
 
 class Publickey:

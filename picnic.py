@@ -1,3 +1,20 @@
+'''
+---------------------------------------------------
+Picnic signaturescheme in Python
+Author: Thorsten Knoll
+Date: March 2019
+
+This implementation walks along the
+C and C++ reference implementations for
+LowMC and Picnic in these GitHubs:
+https://github.com/LowMC/lowm
+https://github.com/Microsoft/Picnic
+
+LowMC, Picnic and this file are published 
+under MIT Licence. See the LICENCE.md file.
+---------------------------------------------------
+'''
+
 import os
 import math
 
