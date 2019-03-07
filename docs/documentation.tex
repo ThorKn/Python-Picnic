@@ -351,7 +351,39 @@ self.\_\_signature\_ser & Stores a serialized signature as bytearray\\ \hline
 \end{center}
 \end{table}
 \subsection{Verify a Picnic signature}
+To verify a given signature, nearly the same steps as to create a signature are executed. The challenges decided which one of the three players in each round got revealed. The transcripts, seeds and  shares of the one revealed player got stored into the signature. In the verification the other two players must be recalculated. After recalculating the "missing" players data, the challenges are re-computed. \\ \\
+In figure \ref{fig:mainloops} can be seen, that the computation of the challenges is the secondlast step in the creation of the signature. The data from all three players are merged into a single hash and the challenges are derived from this hash. Only after the challenges are fixed, the proofs for the signature are assembled, based on the challenges. In other words the challenges depend on the calculated data of all three players.\\ \\
+\textbf{The signature is accepted as valid,} if the re-calculation of the "missing" (not revealed) players and the data from the revealed player computes to the same challenges as in the signature.\\ \\
+The main algorithmic differences between sign and verify are that each MPC round and each LowMC round only calculates two players in the verification. And which two players are calculated depends on the round challenge in the signature. Therefore all internal functions are re-written to accept the round challenge as an additional parameter and calculate only the two "missing" players. This seems a little redundant in the sourcecode but keeps good review and learning capabilities. The verify functions can be recognized by the postfix \texttt{\_verify} in their names.  
 \subsection{The API to Python-Picnic}
+In comparison to \texttt{Python-LowMC} there are no private functions in \texttt{Python-Picnic}. All functions follow the Python scheme for public functions (no leading \texttt{\_\_}). That could be changed in future reworks. Therefore the functions to use \texttt{Python-Picnic} are described here. Additionaly there ist a testfile (\texttt{tests.py}) in which the usage can be seen by function-call examples.\\ \\
+\texttt{Picnic-LowMC} got expanded from the standalone version (in the LowMC Github) to a version for the Picnic needs. For example the sbox-function in LowMC needs to store the outcomes of the AND-gates for the signature. That was not a part in the standalone LowMC. A new, expanded version of LowMC is included within \texttt{Python-Picnic} as the file \texttt{lowmc.py}.\\ \\
+The Picnic specifications inculde a scheme for serializing signatures. The serialization and file-storage of a signature are implemented in \texttt{Python-Picnic}. That enables a way to compare signatures to the ones from the reference implementation. The file-storage writes textfiles with the serialized signature as a HEX-string. This is not the most compact way, but enables human readability and comparison.\\ \\
+The serialization of the keys is also a part of the Picnic specification but is not implemented in \texttt{Python-Picnic} so far. This is a priority issue for future works. That means, that the keys are gone, if the Picnic-object is destroyed (the execution of the sourcecode ends). A function for setting the private key and the plaintext message is included. This function then derives the public key.
+\subsubsection{\texttt{generate\_keys(p, priv\_key)}}
+Sets or generates the plaintext message $p$ (for LowMC key generation) and the private key $pk$. If the parameters are given, they are setted. If left emtpy, they are generated with \texttt{os.urandom()}. The public key then gets derived via LowMC encrpytion. The parameters must be bytearrays with correct length according to the security parameter. So far only "Picnic-L1" is implemented. Therefore the sizes must be 16 bytes. The data is stored in the matching private variables from table \ref{tab:privvars}.
+\subsubsection{\texttt{sign(message)}}
+Signs a message $M$. The keys must be set or generated before. The message must be passed as a bytearray of arbitrary length in the bounds $1 \leq \vert M \vert \leq 2^{55}$. The signature gets stored into the private variable \texttt{self.\_\_signature} (see table \ref{tab:privvars}). 
+\subsubsection{\texttt{verify(message)}}
+Verifies a signature regarding to the message. The keys must be set or generated before. The message must be passed as a bytearray of arbitrary length in the bounds $1 \leq \vert M \vert \leq 2^{55}$. The signature must be available in the private variable \texttt{self.\_\_signature} before calling \texttt{verify}. This can be done by signing a message or by reading one from a file before.
+\subsubsection{\texttt{serialize\_signature()}}
+Serializes a signature from the private variable \texttt{self.\_\_signature} and stores it into the private variable \texttt{self.\_\_signature\_ser}.
+\subsubsection{\texttt{deserialize\_signature()}}
+Deserializes a signature from the private variable \texttt{self.\_\_signature\_ser} and stores it into the private variable \texttt{self.\_\_signature}.
+\subsubsection{\texttt{write\_ser\_sig\_to\_file(filename)}}
+Writes a serialized signature from the private variable \texttt{self.\_\_signature\_ser} to a textfile. The filename must be provided as a string. The textfile then contains the serialized signature as a HEX-string.
+\subsubsection{\texttt{read\_ser\_sig\_to\_file(filename)}}
+Reads a textfile with the given filename (string). The textfile must contain a serialized signature as HEX-string. The serialized signature then gets stored into the private variable \\ \texttt{self.\_\_signature\_ser}.
+\subsubsection{\texttt{print\_signature()}}
+Does a printout into the console of the signature in the private variable \texttt{self.\_\_signature}. The variable must contain a signature.
+\subsubsection{\texttt{print\_signature\_ser()}}
+Does a printout into the console of the serialized signature in the private variable \\ \texttt{self.\_\_signature\_ser} as a HEX dump. The variable must contain a serialized signature.
+\subsection{Prerequisites}
+The code is tested with Ubuntu 16.04 LTS and Python3.6. The package "BitVector" for python is required. The package "hashlib" is used for the SHA3-SHAKE parts. SHAKE is available in "hashlib" since Python 3.6. Therefore \texttt{Python-Picnic} will not run with Python versions lower than 3.6. It is recommended to use a virtual environment for Python, like \texttt{virtualenv}. In (very) short lines:\\ \\
+\texttt{virtualenv --p /usr/bin/python3.6 myvenv}\\
+\texttt{source /path\_to\_myvenv/bin/activate}\\
+\texttt{<myvenv>pip install BitVector}\\
+\texttt{<myvenv>python tests.py}\\
 %\bibliographystyle{unsrt}
 %\bibliography{}
 
