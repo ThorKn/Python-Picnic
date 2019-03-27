@@ -1,812 +1,873 @@
-import os
-import math
+"""Picnic Post-quantum Signature algorithm."""
 
 import hashlib
+import math
+import os
+
 from BitVector import BitVector
 from lowmc import LowMC
-from picnic_types import *
-
-class Picnic:
-
-  def __init__(self):
-
-    # Public picnic parameters
-    self.blocksize = 128
-    self.blocksize_bytes = int(self.blocksize / 8)
-    self.keysize = 128
-    self.rounds = 20
-    self.sboxes = 10
-    self.mpc_rounds = 219
-    self.hash_length = 256
-    self.lowmc = LowMC('picnic-L1')
-
-    # Private variables
-    self.__priv_key = None
-    self.__pub_key = None  
-    self.__views = []
-    self.__commitments = []
-    self.__seeds = []
-    self.__salt = None
-    self.__tapes_pos = 0
-    self.__challenges = None
-    self.__prove = None
-    self.__signature = Signature()
-    self.__signature_ser = None
-
-  ##########################
-  ###   Sign and verify  ###
-  ##########################
-
-  # Signing a message
-  # @param message as bytes
-  def sign(self, message):
-
-    # Initialize empty views[mpc_rounds][players]
-    for _ in range(self.mpc_rounds):
-      three_views = []
-      for _ in range(3):
-        single_view = View(self.blocksize, self.rounds, self.sboxes)
-        three_views.append(single_view)
-      self.__views.append(three_views)
-
-    # Initialize empty commitments[mpc_rounds][players]
-    for _ in range(self.mpc_rounds):
-      three_commits = []
-      for _ in range(3):
-        single_commit = Commitment(self.hash_length, 0)
-        three_commits.append(single_commit)
-      self.__commitments.append(three_commits)
-
-    # Initialize seeds
-    # Get one long shake_128 hash with length (3 * mpc_rounds + 1) * (blocksize / 8)
-    # and split it afterwards into seeds and one salt
-    shake128 = hashlib.shake_128()
-    shake128.update(bytes.fromhex(self.__priv_key.get_bitvector_in_hex()))
-    shake128.update(message)
-    shake128.update(bytes.fromhex(self.__pub_key.public_key.get_bitvector_in_hex()))
-    shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
-    shake128.update(bytes([self.blocksize, 0]))
-    long_hash = shake128.digest(((3 * self.mpc_rounds) + 1) * self.blocksize_bytes)
-
-    count = 0
-    for _ in range(self.mpc_rounds):
-      three_seeds = []
-      for _ in range(3):
-        single_seed = BitVector(rawbytes = long_hash[count:count + self.blocksize_bytes])
-        count += self.blocksize_bytes
-        three_seeds.append(single_seed)
-      self.__seeds.append(three_seeds)
-    self.__salt = BitVector(rawbytes = long_hash[count:count + self.blocksize_bytes])
-
-    # A hack for the last 5 bytes of the tmp_view_raw is needed
-    # and this seems as a bug (or unwanted behaviour) in the ref-sourcecode so far.
-    new_end_of_tmp_view = bytearray([0,0,0,0,0])
-
-    # MPC Rounds
-    for t in range(self.mpc_rounds):
-
-      print("MPC round " + str(t))
-      tapes = []
-      self.__tapes_pos = 0
-
-      # Create tapes[0..2] and i_shares
-      for j in range(2):
-        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(self.__seeds[t][j], self.__salt, t, j, length) + new_end_of_tmp_view
-        self.__views[t][j].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
-        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
-
-      length_2 = int((3 * self.rounds * self.sboxes) / 8)
-      tapes.append(BitVector(rawbytes = self.mpc_create_random_tape(self.__seeds[t][2], self.__salt, t, 2, length_2)))
-      self.__views[t][2].i_share = self.__priv_key ^ \
-                                   self.__views[t][0].i_share ^ \
-                                   self.__views[t][1].i_share
-
-      # Run MPC
-      new_end_of_tmp_view = self.run_mpc(t, tapes, tmp_view_raw);
-
-      # Calculate the commitments
-      self.mpc_commit(t)
-
-    # Calculate challenges
-    self.__challenges = self.h3(message)
-
-    # Calculate proofs
-    self.__proofs = self.prove()
-
-    # Copy proofs, challenges and salt to self.__signature
-    self.__signature.proofs = self.__proofs
-    self.__signature.challenges = self.__challenges
-    self.__signature.salt = self.__salt
-  
-  def verify(self, message):
-
-    # Reset private variables
-    self.__views = []
-    self.__commitments = []
-    self.__seeds = []
-    self.__salt = None
-    self.__tapes_pos = 0
-    self.__challenges = None
-    self.__prove = None
-    
-    # Initialize empty commitments[mpc_rounds][players]
-    for _ in range(self.mpc_rounds):
-      three_commits = []
-      for _ in range(3):
-        single_commit = Commitment(self.hash_length, 0)
-        three_commits.append(single_commit)
-      self.__commitments.append(three_commits)
-
-    # Initialize empty outputs[mpc_rounds][players]
-    outputs = []
-    for _ in range(self.mpc_rounds):
-      three_outputs = []
-      for _ in range(3):
-        single_output = BitVector(intVal = 0, size = self.blocksize)
-        three_outputs.append(single_output)
-      outputs.append(three_outputs)
-
-    # Initialize empty views[mpc_rounds][2]
-    for _ in range(self.mpc_rounds):
-      three_views = []
-      for _ in range(2):
-        single_view = View(self.blocksize, self.rounds, self.sboxes)
-        three_views.append(single_view)
-      self.__views.append(three_views)
-
-    for t in range(self.mpc_rounds):
-
-      print("MPC Round: " + str(t))
-      tapes = []
-      self.__tapes_pos = 0
-
-      # Copy transcript to view[t][1]
-      self.__views[t][1].transcript = self.__signature.proofs[t].transcript
-
-      # Rebuild tapes and i_shares in regard to the challenges
-      chal_trit = self.__signature.challenges[t]
-      tmp_view_raw = None
-      tmp_view_raw_short = None
-
-      # Calculate both i_shares
-      if (chal_trit == 0):
-        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
-                                                  self.__signature.salt, \
-                                                  t, 0, length)
-        self.__views[t][0].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
-        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
-
-        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
-                                                   self.__signature.salt, \
-                                                   t, 1, length)
-        self.__views[t][1].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
-        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
-
-      # Calculate i_share for player 0
-      # i_share for player 1 was given in the proof
-      if (chal_trit == 1):
-        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
-                                                   self.__signature.salt, \
-                                                   t, 1, length)
-        self.__views[t][0].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
-        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
-        
-        length = int((3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw_short = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
-                                                   self.__signature.salt, \
-                                                   t, 2, length)
-        tapes.append(BitVector(rawbytes = tmp_view_raw_short[0:length]))
-        self.__views[t][1].i_share = self.__signature.proofs[t].i_share
-
-      # i_share for player 0 was given in the proof
-      # Calculate i_share for player 1
-      if (chal_trit == 2):
-        length = int((3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw_short = self.mpc_create_random_tape(self.__signature.proofs[t].seed_1, \
-                                                   self.__signature.salt, \
-                                                   t, 2, length)
-        tapes.append(BitVector(rawbytes = tmp_view_raw_short[0:length]))
-        self.__views[t][0].i_share = self.__signature.proofs[t].i_share
-
-        length = int((self.blocksize + 3 * self.rounds * self.sboxes) / 8)
-        tmp_view_raw = self.mpc_create_random_tape(self.__signature.proofs[t].seed_2, \
-                                                   self.__signature.salt, \
-                                                   t, 0, length)
-        self.__views[t][1].i_share = BitVector(rawbytes = tmp_view_raw[0:self.blocksize_bytes])
-        tapes.append(BitVector(rawbytes = tmp_view_raw[self.blocksize_bytes:length]))
-
-      # Run MPC
-      self.run_mpc_verify(t, tapes, tmp_view_raw, chal_trit)
-
-      # Calculate the commitments
-      self.mpc_commit_verify(t, chal_trit)
-
-      # Update outputs
-      outputs[t][chal_trit] = self.__views[t][0].o_share
-      outputs[t][(chal_trit + 1) % 3] = self.__views[t][1].o_share
-      outputs[t][(chal_trit + 2) % 3] = self.__views[t][0].o_share ^ \
-                                        self.__views[t][1].o_share ^ \
-                                        self.__pub_key.public_key
-
-    # Calculate challenges
-    self.__challenges = self.h3_verify(message, outputs)
-
-    if (self.__challenges == self.__signature.challenges):
-      print("Signature verified")
-    else:
-      print("Signature verification failed!")
-
-  ##############################
-  ###   LowMC MPC functions  ###
-  ##############################
-
-  def run_mpc_verify(self, t, tapes, tmp_view_raw, chal_trit):
-
-    key_shares = []
-    states = []
-    roundkeys = []
-
-    # Create empty roundkeys and states
-    # Fill key_shares with views
-    for i in range(2):
-      roundkeys.append(BitVector(intVal = 0, size = self.blocksize))
-      states.append(BitVector(intVal = 0, size = self.blocksize))
-      key_shares.append(self.__views[t][i].i_share)
-
-    # Init states by xor'ing plaintext and roundkeys
-    states = self.mpc_xor_constant_verify(states, self.__pub_key.p, chal_trit)
-    roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, 0, 2)
-    states = self.mpc_xor(states, roundkeys, 2)
-
-    for r in range(self.rounds):
-      
-      states = self.mpc_sbox_verify(states, tapes, r, t)
-      states = self.lowmc.mpc_matrix_mul_lin(states, states, r, 2)
-      states = self.lowmc.mpc_xor_rconsts_verify(states, r, chal_trit)
-      roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, r + 1, 2)
-      states = self.mpc_xor(states, roundkeys, 2)
-
-    for i in range(2):
-      self.__views[t][i].o_share = states[i]
-
-  # Simulate LowMC for all three players
-  def run_mpc(self, t, tapes, tmp_view_raw):
-
-    key_shares = []
-    states = []
-    roundkeys = []
-
-    # Create empty roundkeys and states
-    # Fill key_shares with views
-    for i in range(3):
-      roundkeys.append(BitVector(intVal = 0, size = self.blocksize))
-      states.append(BitVector(intVal = 0, size = self.blocksize))
-      key_shares.append(self.__views[t][i].i_share)
-    
-    # Init states by xor'ing plaintext and roundkeys
-    states = self.mpc_xor_constant(states, self.__pub_key.p)
-    roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, 0, 3)
-    states = self.mpc_xor(states, roundkeys, 3)
-
-    for r in range(self.rounds):
-
-      states = self.mpc_sbox(states, tapes, r, t)
-      states = self.lowmc.mpc_matrix_mul_lin(states, states, r, 3)
-      states = self.lowmc.mpc_xor_rconsts(states, r)
-      roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, r + 1, 3)
-      states = self.mpc_xor(states, roundkeys, 3)
-
-    for i in range(3):
-      self.__views[t][i].o_share = states[i]
-      
-    # This is part of a hack for the end of tmp_view_raw
-    new_end_of_tmp_view = bytes.fromhex(states[2][self.blocksize - 40:self.blocksize].get_bitvector_in_hex())
-
-    return new_end_of_tmp_view
-
-  # MPC LowMC sbox for verifying
-  def mpc_sbox_verify(self, states, tapes, r, t):
-
-    a = (BitVector(intVal = 0, size = 3))
-    b = (BitVector(intVal = 0, size = 3))
-    c = (BitVector(intVal = 0, size = 3))
-    ab = (BitVector(intVal = 0, size = 3))
-    bc = (BitVector(intVal = 0, size = 3))
-    ca = (BitVector(intVal = 0, size = 3))
-
-    # Sbox'ing the first 3*self.sboxes bits for
-    # all three players
-    for i in range(0,(3 * self.sboxes),3):
-      
-      for j in range(2):
-        a[j] = states[j][i + 2]
-        b[j] = states[j][i + 1]
-        c[j] = states[j][i]
-
-      ab = self.mpc_and_verify(a, b, tapes, r, t)
-      bc = self.mpc_and_verify(b, c, tapes, r, t)
-      ca = self.mpc_and_verify(c, a, tapes, r, t)
-
-      for j in range(2):
-        states[j][i + 2] = a[j] ^ bc[j]
-        states[j][i + 1] = a[j] ^ b[j] ^ ca[j]
-        states[j][i]     = a[j] ^ b[j] ^ c[j] ^ ab[j]
-
-    return states
-
-  # MPC LowMC sbox for signing
-  def mpc_sbox(self, states, tapes, r, t):
-
-    a = (BitVector(intVal = 0, size = 3))
-    b = (BitVector(intVal = 0, size = 3))
-    c = (BitVector(intVal = 0, size = 3))
-    ab = (BitVector(intVal = 0, size = 3))
-    bc = (BitVector(intVal = 0, size = 3))
-    ca = (BitVector(intVal = 0, size = 3))
-
-    # Sbox'ing the first 3*self.sboxes bits for
-    # all three players
-    for i in range(0,(3 * self.sboxes),3):
-      
-      for j in range(3):
-        a[j] = states[j][i + 2]
-        b[j] = states[j][i + 1]
-        c[j] = states[j][i]
-
-      ab = self.mpc_and(a, b, tapes, r, t)
-      bc = self.mpc_and(b, c, tapes, r, t)
-      ca = self.mpc_and(c, a, tapes, r, t)
-
-      for j in range(3):
-        states[j][i + 2] = a[j] ^ bc[j]
-        states[j][i + 1] = a[j] ^ b[j] ^ ca[j]
-        states[j][i]     = a[j] ^ b[j] ^ c[j] ^ ab[j]
-
-    return states
-
-  # MPC LowMC AND for verifying
-  def mpc_and_verify(self, in1, in2, tapes, r, t):
-
-    rand = BitVector(intVal = 0, size = 2)
-    rand[0] = tapes[0][self.__tapes_pos]
-    rand[1] = tapes[1][self.__tapes_pos]
-
-    result = BitVector(intVal = 0, size = 2)
-
-    result[0] = (in1[0] & in2[1]) ^ \
-                (in1[1] & in2[0]) ^ \
-                (in1[0] & in2[0]) ^ \
-                rand[0] ^ \
-                rand[1]
-    self.__views[t][0].transcript[self.__tapes_pos] = result[0]
-    result[1] = self.__views[t][1].transcript[self.__tapes_pos]
-    self.__tapes_pos += 1
-
-    return result
-
-  # MPC LowMC AND for signing and updating the transcripts
-  def mpc_and(self, in1, in2, tapes, r, t):
-    
-    rand = BitVector(intVal = 0, size = 3)
-    rand[0] = tapes[0][self.__tapes_pos]
-    rand[1] = tapes[1][self.__tapes_pos]
-    rand[2] = tapes[2][self.__tapes_pos]
-
-    result = BitVector(intVal = 0, size = 3)
-    
-    # Update the transcripts for all three players
-    for i in range(3):
-      result[i] = (in1[i] & in2[(i + 1) % 3]) ^ \
-                  (in1[(i + 1) % 3] & in2[i]) ^ \
-                  (in1[i] & in2[i]) ^ \
-                  rand[i] ^ \
-                  rand[(i + 1) % 3]      
-      self.__views[t][i].transcript[self.__tapes_pos] = result[i]
-
-    self.__tapes_pos += 1
-
-    return result
-
-  # MPC LowMC XOR constant verify
-  def mpc_xor_constant_verify(self, ins, constant, chal_trit):
-
-    if (chal_trit == 0):
-      ins[0] = ins[0] ^ constant
-    if (chal_trit == 2):
-      ins[1] = ins[1] ^ constant
-    return ins
-
-  # MPC LowMC XOR a constant
-  def mpc_xor_constant(self, ins, constant):
-
-    ins[0] = ins[0] ^ constant
-    return ins
-
-  # MPC LowMC XOR outs and ins for all players
-  def mpc_xor(self, outs, ins, players):
-
-    for i in range(players):
-      outs[i] = outs[i] ^ ins[i]
-    return outs
-
-  # Calculate the commitments, the third one is given in the proof
-  def mpc_commit_verify(self, t, chal_trit):
-
-    self.__commitments[t][chal_trit].hash = self.mpc_h0(t, 0)
-    self.__commitments[t][(chal_trit + 1) % 3].hash = self.mpc_h0(t, 1)
-    self.__commitments[t][(chal_trit + 2) % 3].hash = self.__signature.proofs[t].view_3_commit
-
-  def mpc_h0(self, t, player):
-
-    # H4(seed[mpc_round][player])
-    shake128 = hashlib.shake_128()
-    shake128.update(bytes([0x04]))
-    if (player == 0):
-      shake128.update(bytes.fromhex(self.__signature.proofs[t].seed_1.get_bitvector_in_hex()))
-    if (player == 1):
-      shake128.update(bytes.fromhex(self.__signature.proofs[t].seed_2.get_bitvector_in_hex()))
-    h4 = shake128.digest(int(self.hash_length / 8))
-
-    # Calculate h0(h4, views[t])
-    shake128 = hashlib.shake_128()
-    shake128.update(bytes([0x00]))
-    shake128.update(h4)
-    shake128.update(bytes.fromhex(self.__views[t][player].i_share.get_bitvector_in_hex()))
-    shake128.update(bytes.fromhex(self.__views[t][player].transcript.get_bitvector_in_hex()))
-    shake128.update(bytes.fromhex(self.__views[t][player].o_share.get_bitvector_in_hex()))
-
-    return shake128.digest(int(self.hash_length / 8))
-
-  # Calculate the commitments by hashing the 
-  # seeds and views for all three players
-  def mpc_commit(self, t):
-
-    for i in range(3):
-
-      # H4(seed[mpc_round][player])
-      shake128 = hashlib.shake_128()
-      shake128.update(bytes([0x04]))
-      shake128.update(bytes.fromhex(self.__seeds[t][i].get_bitvector_in_hex()))
-      h4 = shake128.digest(int(self.hash_length / 8))
-
-      # Calculate h0(h4, views[t])
-      shake128 = hashlib.shake_128()
-      shake128.update(bytes([0x00]))
-      shake128.update(h4)
-      shake128.update(bytes.fromhex(self.__views[t][i].i_share.get_bitvector_in_hex()))
-      shake128.update(bytes.fromhex(self.__views[t][i].transcript.get_bitvector_in_hex()))
-      shake128.update(bytes.fromhex(self.__views[t][i].o_share.get_bitvector_in_hex()))
-
-      self.__commitments[t][i].hash = shake128.digest(int(self.hash_length / 8))
-      
-  # Get one long hash for the random tapes
-  def mpc_create_random_tape(self, seed, salt, mpc_round, player, length):
-
-    # H2(seed[mpc_round][player])
-    shake128 = hashlib.shake_128()
-    shake128.update(bytes([0x02]))
-    shake128.update(bytes.fromhex(seed.get_bitvector_in_hex()))
-    h2 = shake128.digest(int(self.hash_length / 8))
-
-    # Create random tape
-    shake128 = hashlib.shake_128()
-    shake128.update(h2)
-    shake128.update(bytes.fromhex(salt.get_bitvector_in_hex()))
-    shake128.update(bytes([mpc_round, 0]))
-    shake128.update(bytes([player, 0]))
-    length_le = length.to_bytes(2, byteorder='little')
-    shake128.update(length.to_bytes(2, byteorder='little'))
-
-    return shake128.digest(length)
-
-  ################################
-  ###   Challenges and proofs  ###
-  ################################
-  # Calculating the challenges in {0,1,2}*
-  def h3_verify(self, message, outputs):
-
-    shake128 = hashlib.shake_128()
-
-    # Hash the output shares with prefix 0x01
-    shake128.update(bytes([0x01]))    
-    for t in range(self.mpc_rounds):
-      for player in range(3):
-         shake128.update(bytes.fromhex(outputs[t][player].get_bitvector_in_hex()))
-    
-    # Hash the commitments
-    for t in range(self.mpc_rounds):
-      for player in range(3):
-         shake128.update(self.__commitments[t][player].hash)
-    
-    # Hash the circuit output
-    circuit_output = outputs[0][0] ^ outputs[0][1] ^ outputs[0][2]
-    shake128.update(bytes.fromhex(circuit_output.get_bitvector_in_hex()))
-
-    # Hash p (plaintext), salt and message to get the challenge from it
-    shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
-    shake128.update(bytes.fromhex(self.__signature.salt.get_bitvector_in_hex()))
-    shake128.update(message)
-
-    tmp_hash = shake128.digest(int(self.hash_length / 8))
-
-    tmp_bitvector = BitVector(rawbytes = tmp_hash)
-    bit_pos = 0
-    result = []
-
-    # Build the challenge in {0,1,2}* as a list.
-    # Each two bits in the hash become one element in the challenge-list
-    # until the challenge-list has the length of self.mpc_rounds.
-    # There can be re-calculating of the hash to reach that length.
-    while(1):
-      a = tmp_bitvector[bit_pos]
-      b = tmp_bitvector[bit_pos + 1]
-      if (a == 0 and b == 0):
-        result.append(0)
-      if (a == 0 and b == 1):
-        result.append(1)
-      if (a == 1 and b == 0):
-        result.append(2)
-      bit_pos += 2
-      if (len(result) >= self.mpc_rounds):
-        break
-      if (bit_pos >= self.hash_length):
+from picnic_types import Commitment
+from picnic_types import Proof
+from picnic_types import Publickey
+from picnic_types import Signature
+from picnic_types import View
+
+
+class Picnic(object):
+    """ToDo."""
+
+    slots = ['blocksize', 'blocksize_bytes', 'keysize', 'rounds', 'sboxes',
+             'mpc_rounds', 'hash_length', 'lowmc', '__priv_key', '__pub_key',
+             '__views', '__commitments', '__seeds', '__salt', '__tapes_pos',
+             '__challenges', '__prove', '__signature', '__signature_ser']
+
+    def __init__(self):
+        """ToDo."""
+        # Public picnic parameters
+        self.blocksize = 128
+        self.blocksize_bytes = int(self.blocksize / 8)
+        self.keysize = 128
+        self.rounds = 20
+        self.sboxes = 10
+        self.mpc_rounds = 219
+        self.hash_length = 256
+        self.lowmc = LowMC('picnic-L1')
+
+        # Private variables
+        self.__priv_key = None
+        self.__pub_key = None
+        self.__views = []
+        self.__commitments = []
+        self.__seeds = []
+        self.__salt = None
+        self.__tapes_pos = 0
+        self.__challenges = None
+        self.__prove = None
+        self.__signature = Signature()
+        self.__signature_ser = None
+
+    def sign(self, message):
+        """ToDo."""
+        # Initialize empty views[mpc_rounds][players]
+        for _ in range(self.mpc_rounds):
+            three_views = []
+            for _ in range(3):
+                single_view = View(self.blocksize, self.rounds, self.sboxes)
+                three_views.append(single_view)
+            self.__views.append(three_views)
+
+        # Initialize empty commitments[mpc_rounds][players]
+        for _ in range(self.mpc_rounds):
+            three_commits = []
+            for _ in range(3):
+                single_commit = Commitment(self.hash_length, 0)
+                three_commits.append(single_commit)
+            self.__commitments.append(three_commits)
+
+        # Initialize seeds
+        # Get one long shake_128 hash with length
+        # (3 * mpc_rounds + 1) * (blocksize / 8)
+        # and split it afterwards into seeds and one salt
         shake128 = hashlib.shake_128()
-        shake128.update(bytes([0x01]))
-        shake128.update(tmp_hash)
-        tmp_hash = shake128.digest(int(self.hash_length / 8))
-        tmp_bitvector = BitVector(rawbytes = tmp_hash)
-        bit_pos = 0
-  
-    return result
+        shake128.update(bytes.fromhex(self.__priv_key.get_bitvector_in_hex()))
+        shake128.update(message)
+        shake128.update(bytes.fromhex(self.__pub_key
+                                      .public_key.get_bitvector_in_hex()))
+        shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
+        shake128.update(bytes([self.blocksize, 0]))
+        long_hash = shake128.digest(((3 * self.mpc_rounds) + 1)
+                                    * self.blocksize_bytes)
 
-  # Calculating the challenges in {0,1,2}*
-  def h3(self, message):
+        count = 0
+        for _ in range(self.mpc_rounds):
+            three_seeds = []
+            for _ in range(3):
+                single_seed = BitVector(rawbytes=long_hash[count:count
+                                        + self.blocksize_bytes])
+                count += self.blocksize_bytes
+                three_seeds.append(single_seed)
+            self.__seeds.append(three_seeds)
+        self.__salt = BitVector(rawbytes=long_hash[count:count
+                                + self.blocksize_bytes])
 
-    shake128 = hashlib.shake_128()
+        # MPC Rounds
+        for t in range(self.mpc_rounds):
 
-    # Hash the output shares with prefix 0x01
-    shake128.update(bytes([0x01]))    
-    for t in range(self.mpc_rounds):
-      for player in range(3):
-         shake128.update(bytes.fromhex(self.__views[t][player].o_share.get_bitvector_in_hex()))
-    
-    # Hash the commitments
-    for t in range(self.mpc_rounds):
-      for player in range(3):
-         shake128.update(self.__commitments[t][player].hash)
-    
-    # Hash the circuit output
-    circuit_output = self.__views[0][0].o_share ^ \
-                     self.__views[0][1].o_share ^ \
-                     self.__views[0][2].o_share
-    shake128.update(bytes.fromhex(circuit_output.get_bitvector_in_hex()))
+            print("MPC round " + str(t))
+            tapes = []
+            self.__tapes_pos = 0
 
-    # Hash p (plaintext), salt and message to get the challenge from it
-    shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
-    shake128.update(bytes.fromhex(self.__salt.get_bitvector_in_hex()))
-    shake128.update(message)
+            # Create tapes[0..2] and i_shares
+            for j in range(2):
+                length = int((self.blocksize + 3 * self.rounds
+                              * self.sboxes) / 8)
+                tmp_view_raw = self.mpc_create_random_tape(self.__seeds[t][j],
+                                                           self.__salt, t, j,
+                                                           length)
+                self.__views[t][j].i_share = BitVector(rawbytes=tmp_view_raw[0:
+                                                       self.blocksize_bytes])
+                tapes.append(BitVector(rawbytes=tmp_view_raw[
+                                       self.blocksize_bytes:length]
+                                       ))
 
-    tmp_hash = shake128.digest(int(self.hash_length / 8))
+            length_2 = int((3 * self.rounds * self.sboxes) / 8)
+            tapes.append(BitVector(rawbytes=self.mpc_create_random_tape(
+                                   self.__seeds[t][2], self.__salt, t, 2,
+                                   length_2)))
+            self.__views[t][2].i_share = self.__priv_key ^ \
+                self.__views[t][0].i_share ^ \
+                self.__views[t][1].i_share
 
-    tmp_bitvector = BitVector(rawbytes = tmp_hash)
-    bit_pos = 0
-    result = []
+            # Run MPC
+            self.run_mpc(t, tapes)
 
-    # Build the challenge in {0,1,2}* as a list.
-    # Each two bits in the hash become one element in the challenge-list
-    # until the challenge-list has the length of self.mpc_rounds.
-    # There can be re-calculating of the hash to reach that length.
-    while(1):
-      a = tmp_bitvector[bit_pos]
-      b = tmp_bitvector[bit_pos + 1]
-      if (a == 0 and b == 0):
-        result.append(0)
-      if (a == 0 and b == 1):
-        result.append(1)
-      if (a == 1 and b == 0):
-        result.append(2)
-      bit_pos += 2
-      if (len(result) >= self.mpc_rounds):
-        break
-      if (bit_pos >= self.hash_length):
+            # Calculate the commitments
+            self.mpc_commit(t)
+
+        # Calculate challenges
+        self.__challenges = self.h3(message)
+
+        # Calculate proofs
+        self.__proofs = self.prove()
+
+        # Copy proofs, challenges and salt to self.__signature
+        self.__signature.proofs = self.__proofs
+        self.__signature.challenges = self.__challenges
+        self.__signature.salt = self.__salt
+
+    def verify(self, message):
+        """ToDo."""
+        # Reset private variables
+        self.__views = []
+        self.__commitments = []
+        self.__seeds = []
+        self.__salt = None
+        self.__tapes_pos = 0
+        self.__challenges = None
+        self.__prove = None
+
+        # Initialize empty commitments[mpc_rounds][players]
+        for _ in range(self.mpc_rounds):
+            three_commits = []
+            for _ in range(3):
+                single_commit = Commitment(self.hash_length, 0)
+                three_commits.append(single_commit)
+            self.__commitments.append(three_commits)
+
+        # Initialize empty outputs[mpc_rounds][players]
+        outputs = []
+        for _ in range(self.mpc_rounds):
+            three_outputs = []
+            for _ in range(3):
+                single_output = BitVector(intVal=0, size=self.blocksize)
+                three_outputs.append(single_output)
+            outputs.append(three_outputs)
+
+        # Initialize empty views[mpc_rounds][2]
+        for _ in range(self.mpc_rounds):
+            three_views = []
+            for _ in range(2):
+                single_view = View(self.blocksize, self.rounds, self.sboxes)
+                three_views.append(single_view)
+            self.__views.append(three_views)
+
+        for t in range(self.mpc_rounds):
+
+            print("MPC Round: " + str(t))
+            tapes = []
+            self.__tapes_pos = 0
+
+            # Copy transcript to view[t][1]
+            self.__views[t][1].transcript = self.__signature \
+                .proofs[t].transcript
+
+            # Rebuild tapes and i_shares in regard to the challenges
+            chal_trit = self.__signature.challenges[t]
+            tmp_view_raw = None
+            tmp_view_raw_short = None
+
+            # Calculate both i_shares
+            if (chal_trit == 0):
+                length = int((self.blocksize + 3 * self.rounds
+                              * self.sboxes) / 8)
+                tmp_view_raw = self.mpc_create_random_tape(
+                                            self.__signature.proofs[t].seed_1,
+                                            self.__signature.salt,
+                                            t, 0, length)
+                self.__views[t][0].i_share = BitVector(rawbytes=tmp_view_raw[0:
+                                                       self.blocksize_bytes])
+                tapes.append(BitVector(rawbytes=tmp_view_raw[
+                                            self.blocksize_bytes:length]))
+
+                tmp_view_raw = self.mpc_create_random_tape(
+                                            self.__signature.proofs[t].seed_2,
+                                            self.__signature.salt,
+                                            t, 1, length)
+                self.__views[t][1].i_share = BitVector(rawbytes=tmp_view_raw[0:
+                                                       self.blocksize_bytes])
+                tapes.append(BitVector(rawbytes=tmp_view_raw[
+                                            self.blocksize_bytes:length]))
+
+            # Calculate i_share for player 0
+            # i_share for player 1 was given in the proof
+            if (chal_trit == 1):
+                length = int((self.blocksize + 3 * self.rounds
+                              * self.sboxes) / 8)
+                tmp_view_raw = self.mpc_create_random_tape(
+                                            self.__signature.proofs[t].seed_1,
+                                            self.__signature.salt,
+                                            t, 1, length)
+                self.__views[t][0].i_share = BitVector(rawbytes=tmp_view_raw[0:
+                                                       self.blocksize_bytes])
+                tapes.append(BitVector(rawbytes=tmp_view_raw[
+                                            self.blocksize_bytes:length]))
+
+                length = int((3 * self.rounds * self.sboxes) / 8)
+                tmp_view_raw_short = self.mpc_create_random_tape(
+                                            self.__signature.proofs[t].seed_2,
+                                            self.__signature.salt,
+                                            t, 2, length)
+                tapes.append(BitVector(rawbytes=tmp_view_raw_short[0:length]))
+                self.__views[t][1].i_share = self.__signature.proofs[t].i_share
+
+            # i_share for player 0 was given in the proof
+            # Calculate i_share for player 1
+            if (chal_trit == 2):
+                length = int((3 * self.rounds * self.sboxes) / 8)
+                tmp_view_raw_short = self.mpc_create_random_tape(
+                                            self.__signature.proofs[t].seed_1,
+                                            self.__signature.salt,
+                                            t, 2, length)
+                tapes.append(BitVector(rawbytes=tmp_view_raw_short[0:length]))
+                self.__views[t][0].i_share = self.__signature.proofs[t].i_share
+
+                length = int((self.blocksize + 3 * self.rounds
+                              * self.sboxes) / 8)
+                tmp_view_raw = self.mpc_create_random_tape(
+                                            self.__signature.proofs[t].seed_2,
+                                            self.__signature.salt,
+                                            t, 0, length)
+                self.__views[t][1].i_share = BitVector(rawbytes=tmp_view_raw[0:
+                                                       self.blocksize_bytes])
+                tapes.append(BitVector(rawbytes=tmp_view_raw[
+                                       self.blocksize_bytes:length]))
+
+            # Run MPC
+            self.run_mpc_verify(t, tapes, tmp_view_raw, chal_trit)
+
+            # Calculate the commitments
+            self.mpc_commit_verify(t, chal_trit)
+
+            # Update outputs
+            outputs[t][chal_trit] = self.__views[t][0].o_share
+            outputs[t][(chal_trit + 1) % 3] = self.__views[t][1].o_share
+            outputs[t][(chal_trit + 2) % 3] = self.__views[t][0].o_share ^ \
+                self.__views[t][1].o_share ^ \
+                self.__pub_key.public_key
+
+        # Calculate challenges
+        self.__challenges = self.h3_verify(message, outputs)
+
+        if (self.__challenges == self.__signature.challenges):
+            print("Signature verified")
+        else:
+            print("Signature verification failed!")
+
+    def run_mpc_verify(self, t, tapes, tmp_view_raw, chal_trit):
+        """ToDo."""
+        key_shares = []
+        states = []
+        roundkeys = []
+
+        # Create empty roundkeys and states
+        # Fill key_shares with views
+        for i in range(2):
+            roundkeys.append(BitVector(intVal=0, size=self.blocksize))
+            states.append(BitVector(intVal=0, size=self.blocksize))
+            key_shares.append(self.__views[t][i].i_share)
+
+        # Init states by xor'ing plaintext and roundkeys
+        states = self.mpc_xor_constant_verify(states,
+                                              self.__pub_key.p, chal_trit)
+        roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys, key_shares, 0, 2)
+        states = self.mpc_xor(states, roundkeys, 2)
+
+        for r in range(self.rounds):
+
+            states = self.mpc_sbox_verify(states, tapes, r, t)
+            states = self.lowmc.mpc_matrix_mul_lin(states, states, r, 2)
+            states = self.lowmc.mpc_xor_rconsts_verify(states, r, chal_trit)
+            roundkeys = self.lowmc.mpc_matrix_mul_keys(roundkeys,
+                                                       key_shares, r + 1, 2)
+            states = self.mpc_xor(states, roundkeys, 2)
+
+        for i in range(2):
+            self.__views[t][i].o_share = states[i]
+
+    def run_mpc(self, t, tapes):
+        """ToDo."""
+        key_shares = []
+        states = [0, 0, 0]
+        roundkeys = [0, 0, 0]
+
+        # Create empty roundkeys and states
+        # Fill key_shares with views
+        for i in range(3):
+            key_shares.append(self.__views[t][i].i_share)
+
+        # Init states by xor'ing plaintext and roundkeys
+        states = self.mpc_xor_constant(states, self.__pub_key.p)
+        roundkeys = self.lowmc.mpc_matrix_mul_keys(key_shares, 0, 3)
+        states = self.mpc_xor(states, roundkeys, 3)
+
+        for r in range(self.rounds):
+
+            states = self.mpc_sbox(states, tapes, r, t)
+            states = self.lowmc.mpc_matrix_mul_lin(states, r, 3)
+            states = self.lowmc.mpc_xor_rconsts(states, r)
+            roundkeys = self.lowmc.mpc_matrix_mul_keys(key_shares, r + 1, 3)
+            states = self.mpc_xor(states, roundkeys, 3)
+
+        for i in range(3):
+            self.__views[t][i].o_share = BitVector(intVal=states[i],
+                                                   size=self.blocksize)
+
+    def mpc_sbox_verify(self, states, tapes, r, t):
+        """ToDo."""
+        a = (BitVector(intVal=0, size=3))
+        b = (BitVector(intVal=0, size=3))
+        c = (BitVector(intVal=0, size=3))
+        ab = (BitVector(intVal=0, size=3))
+        bc = (BitVector(intVal=0, size=3))
+        ca = (BitVector(intVal=0, size=3))
+
+        # Sbox'ing the first 3*self.sboxes bits for
+        # all three players
+        for i in range(0, (3 * self.sboxes), 3):
+
+            for j in range(2):
+                a[j] = states[j][i + 2]
+                b[j] = states[j][i + 1]
+                c[j] = states[j][i]
+
+            ab = self.mpc_and_verify(a, b, tapes, r, t)
+            bc = self.mpc_and_verify(b, c, tapes, r, t)
+            ca = self.mpc_and_verify(c, a, tapes, r, t)
+
+            for j in range(2):
+                states[j][i + 2] = a[j] ^ bc[j]
+                states[j][i + 1] = a[j] ^ b[j] ^ ca[j]
+                states[j][i] = a[j] ^ b[j] ^ c[j] ^ ab[j]
+
+        return states
+
+    def mpc_sbox(self, states, tapes, r, t):
+        """ToDo."""
+        a = [0, 0, 0]
+        b = [0, 0, 0]
+        c = [0, 0, 0]
+        states_str = []
+        result_id = []
+
+        # Sbox'ing the first 3*self.sboxes bits for
+        # all three players
+        for player in range(3):
+            states_str.append(format(states[player], '0{0}b'
+                              .format(self.blocksize)))
+        for player in range(3):
+            result_id.append(states_str[player][(3 * self.sboxes):
+                             self.blocksize])
+
+        result_sboxes = ['', '', '']
+        for i in range(0, (3 * self.sboxes), 3):
+
+            for j in range(3):
+                a[j] = int(states_str[j][i + 2], 2)
+                b[j] = int(states_str[j][i + 1], 2)
+                c[j] = int(states_str[j][i], 2)
+
+            ab = self.mpc_and(a, b, tapes, r, t)
+            bc = self.mpc_and(b, c, tapes, r, t)
+            ca = self.mpc_and(c, a, tapes, r, t)
+
+            for j in range(3):
+                result_sboxes[j] = result_sboxes[j] \
+                                 + format(a[j] ^ b[j] ^ c[j] ^ ab[j], '01b') \
+                                 + format(a[j] ^ b[j] ^ ca[j], '01b') \
+                                 + format(a[j] ^ bc[j], '01b')
+
+        results = []
+        for j in range(3):
+            results.append(int(result_sboxes[j] + result_id[j], 2))
+
+        return results
+
+    def mpc_and_verify(self, in1, in2, tapes, r, t):
+        """ToDo."""
+        rand = BitVector(intVal=0, size=2)
+        rand[0] = tapes[0][self.__tapes_pos]
+        rand[1] = tapes[1][self.__tapes_pos]
+
+        result = BitVector(intVal=0, size=2)
+
+        result[0] = (in1[0] & in2[1]) ^ \
+                    (in1[1] & in2[0]) ^ \
+                    (in1[0] & in2[0]) ^ rand[0] ^ rand[1]
+
+        self.__views[t][0].transcript[self.__tapes_pos] = result[0]
+        result[1] = self.__views[t][1].transcript[self.__tapes_pos]
+        self.__tapes_pos += 1
+
+        return result
+
+    def mpc_and(self, in1, in2, tapes, r, t):
+        """ToDo."""
+        rand = BitVector(intVal=0, size=3)
+        rand[0] = tapes[0][self.__tapes_pos]
+        rand[1] = tapes[1][self.__tapes_pos]
+        rand[2] = tapes[2][self.__tapes_pos]
+
+        result = BitVector(intVal=0, size=3)
+
+        # Update the transcripts for all three players
+        for i in range(3):
+            result[i] = (in1[i] & in2[(i + 1) % 3]) ^ \
+                      (in1[(i + 1) % 3] & in2[i]) ^ \
+                      (in1[i] & in2[i]) ^ \
+                      rand[i] ^ \
+                      rand[(i + 1) % 3]
+            self.__views[t][i].transcript[self.__tapes_pos] = result[i]
+
+        self.__tapes_pos += 1
+
+        return result
+
+    def mpc_xor_constant_verify(self, ins, constant, chal_trit):
+        """ToDo."""
+        if (chal_trit == 0):
+            ins[0] = ins[0] ^ constant
+        if (chal_trit == 2):
+            ins[1] = ins[1] ^ constant
+        return ins
+
+    def mpc_xor_constant(self, ins, constant):
+        """ToDo."""
+        constant = int(constant)
+        ins[0] = ins[0] ^ constant
+        return ins
+
+    def mpc_xor(self, outs, ins, players):
+        """ToDo."""
+        for i in range(players):
+            outs[i] = outs[i] ^ ins[i]
+        return outs
+
+    def mpc_commit_verify(self, t, chal_trit):
+        """ToDo."""
+        self.__commitments[t][chal_trit].hash = self.mpc_h0(t, 0)
+        self.__commitments[t][(chal_trit + 1) % 3].hash = self.mpc_h0(t, 1)
+        self.__commitments[t][(chal_trit + 2) % 3].hash = \
+            self.__signature.proofs[t].view_3_commit
+
+    def mpc_h0(self, t, player):
+        """ToDo."""
+        # H4(seed[mpc_round][player])
         shake128 = hashlib.shake_128()
+        shake128.update(bytes([0x04]))
+        if (player == 0):
+            shake128.update(bytes.fromhex(self.__signature.proofs[t]
+                                          .seed_1.get_bitvector_in_hex()))
+        if (player == 1):
+            shake128.update(bytes.fromhex(self.__signature.proofs[t]
+                                          .seed_2.get_bitvector_in_hex()))
+        h4 = shake128.digest(int(self.hash_length / 8))
+
+        # Calculate h0(h4, views[t])
+        shake128 = hashlib.shake_128()
+        shake128.update(bytes([0x00]))
+        shake128.update(h4)
+        shake128.update(bytes.fromhex(self.__views[t][player]
+                                      .i_share.get_bitvector_in_hex()))
+        shake128.update(bytes.fromhex(self.__views[t][player]
+                                      .transcript.get_bitvector_in_hex()))
+        shake128.update(bytes.fromhex(self.__views[t][player]
+                                      .o_share.get_bitvector_in_hex()))
+
+        return shake128.digest(int(self.hash_length / 8))
+
+    # Calculate the commitments by hashing the
+    # seeds and views for all three players
+    def mpc_commit(self, t):
+        """ToDo."""
+        for i in range(3):
+
+            # H4(seed[mpc_round][player])
+            shake128 = hashlib.shake_128()
+            shake128.update(bytes([0x04]))
+            shake128.update(bytes.fromhex(self.__seeds[t][i]
+                                          .get_bitvector_in_hex()))
+            h4 = shake128.digest(int(self.hash_length / 8))
+
+            # Calculate h0(h4, views[t])
+            shake128 = hashlib.shake_128()
+            shake128.update(bytes([0x00]))
+            shake128.update(h4)
+            shake128.update(bytes.fromhex(self.__views[t][i]
+                                          .i_share.get_bitvector_in_hex()))
+            shake128.update(bytes.fromhex(self.__views[t][i]
+                                          .transcript.get_bitvector_in_hex()))
+            shake128.update(bytes.fromhex(self.__views[t][i]
+                                          .o_share.get_bitvector_in_hex()))
+
+            self.__commitments[t][i].hash = \
+                shake128.digest(int(self.hash_length / 8))
+
+    # Get one long hash for the random tapes
+    def mpc_create_random_tape(self, seed, salt, mpc_round, player, length):
+        """ToDo."""
+        # H2(seed[mpc_round][player])
+        shake128 = hashlib.shake_128()
+        shake128.update(bytes([0x02]))
+        shake128.update(bytes.fromhex(seed.get_bitvector_in_hex()))
+        h2 = shake128.digest(int(self.hash_length / 8))
+
+        # Create random tape
+        shake128 = hashlib.shake_128()
+        shake128.update(h2)
+        shake128.update(bytes.fromhex(salt.get_bitvector_in_hex()))
+        shake128.update(bytes([mpc_round, 0]))
+        shake128.update(bytes([player, 0]))
+        length_le = length.to_bytes(2, byteorder='little')
+        shake128.update(length_le)
+
+        return shake128.digest(length)
+
+    # Calculating the challenges in {0,1,2}*
+    def h3_verify(self, message, outputs):
+        """ToDo."""
+        shake128 = hashlib.shake_128()
+
+        # Hash the output shares with prefix 0x01
         shake128.update(bytes([0x01]))
-        shake128.update(tmp_hash)
+        for t in range(self.mpc_rounds):
+            for player in range(3):
+                shake128.update(bytes.fromhex(outputs[t][player]
+                                .get_bitvector_in_hex()))
+
+        # Hash the commitments
+        for t in range(self.mpc_rounds):
+            for player in range(3):
+                shake128.update(self.__commitments[t][player].hash)
+
+        # Hash the circuit output
+        circuit_output = outputs[0][0] ^ outputs[0][1] ^ outputs[0][2]
+        shake128.update(bytes.fromhex(circuit_output.get_bitvector_in_hex()))
+
+        # Hash p (plaintext), salt and message to get the challenge from it
+        shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
+        shake128.update(bytes.fromhex(self.__signature.salt
+                                      .get_bitvector_in_hex()))
+        shake128.update(message)
+
         tmp_hash = shake128.digest(int(self.hash_length / 8))
-        tmp_bitvector = BitVector(rawbytes = tmp_hash)
+
+        tmp_bitvector = BitVector(rawbytes=tmp_hash)
         bit_pos = 0
-  
-    return result
+        result = []
 
-  # Calculating the proofs from the challenges, seeds,
-  # transcripts, i_shares and commitments
-  def prove(self):
+        # Build the challenge in {0,1,2}* as a list.
+        # Each two bits in the hash become one element in the challenge-list
+        # until the challenge-list has the length of self.mpc_rounds.
+        # There can be re-calculating of the hash to reach that length.
+        while(1):
+            a = tmp_bitvector[bit_pos]
+            b = tmp_bitvector[bit_pos + 1]
+            if (a == 0 and b == 0):
+                result.append(0)
+            if (a == 0 and b == 1):
+                result.append(1)
+            if (a == 1 and b == 0):
+                result.append(2)
+            bit_pos += 2
+            if (len(result) >= self.mpc_rounds):
+                break
+            if (bit_pos >= self.hash_length):
+                shake128 = hashlib.shake_128()
+                shake128.update(bytes([0x01]))
+                shake128.update(tmp_hash)
+                tmp_hash = shake128.digest(int(self.hash_length / 8))
+                tmp_bitvector = BitVector(rawbytes=tmp_hash)
+                bit_pos = 0
 
-    proofs = []
+        return result
 
-    for t in range(self.mpc_rounds):
-      tmp_proof = Proof()
+    # Calculating the challenges in {0,1,2}*
+    def h3(self, message):
+        """ToDo."""
+        shake128 = hashlib.shake_128()
 
-      challenge = self.__challenges[t]
-      if (challenge == 0):
-        tmp_proof.seed_1 = self.__seeds[t][0]
-        tmp_proof.seed_2 = self.__seeds[t][1]
+        # Hash the output shares with prefix 0x01
+        shake128.update(bytes([0x01]))
+        for t in range(self.mpc_rounds):
+            for player in range(3):
+                shake128.update(bytes.fromhex(self.__views[t][player]
+                                              .o_share.get_bitvector_in_hex()))
 
-      if (challenge == 1):
-        tmp_proof.seed_1 = self.__seeds[t][1]
-        tmp_proof.seed_2 = self.__seeds[t][2]
-        tmp_proof.i_share = self.__views[t][2].i_share
+        # Hash the commitments
+        for t in range(self.mpc_rounds):
+            for player in range(3):
+                shake128.update(self.__commitments[t][player].hash)
 
-      if (challenge == 2):
-        tmp_proof.seed_1 = self.__seeds[t][2]
-        tmp_proof.seed_2 = self.__seeds[t][0]
-        tmp_proof.i_share = self.__views[t][2].i_share
-      
-      tmp_proof.transcript = self.__views[t][(challenge + 1) % 3].transcript
-      tmp_proof.view_3_commit = self.__commitments[t][(challenge + 2) % 3].hash
+        # Hash the circuit output
+        circuit_output = self.__views[0][0].o_share ^ \
+            self.__views[0][1].o_share ^ \
+            self.__views[0][2].o_share
+        shake128.update(bytes.fromhex(circuit_output.get_bitvector_in_hex()))
 
-      proofs.append(tmp_proof)
+        # Hash p (plaintext), salt and message to get the challenge from it
+        shake128.update(bytes.fromhex(self.__pub_key.p.get_bitvector_in_hex()))
+        shake128.update(bytes.fromhex(self.__salt.get_bitvector_in_hex()))
+        shake128.update(message)
 
-    return proofs    
-  
-  ###########################
-  ###   Helper functions  ###
-  ###########################
+        tmp_hash = shake128.digest(int(self.hash_length / 8))
 
-  # Set or generate the priv and pub key
-  def generate_keys(self, p = None, priv_key = None):
+        tmp_bitvector = BitVector(rawbytes=tmp_hash)
+        bit_pos = 0
+        result = []
 
-    # Generate random p (plaintext) with length self.keysize
-    if (p is None):
-      raw_p = os.urandom(int(self.keysize / 8))
-    else:
-      raw_p = p
-    bitvector_p = BitVector(rawbytes = raw_p)
-  
-    # Generate private key with length self.keysize
-    if (priv_key is None):
-      raw_priv_key = os.urandom(int(self.keysize / 8))    
-    else:
-      raw_priv_key = priv_key
-    self.__priv_key = BitVector(rawbytes = raw_priv_key)
+        # Build the challenge in {0,1,2}* as a list.
+        # Each two bits in the hash become one element in the challenge-list
+        # until the challenge-list has the length of self.mpc_rounds.
+        # There can be re-calculating of the hash to reach that length.
+        while(1):
+            a = tmp_bitvector[bit_pos]
+            b = tmp_bitvector[bit_pos + 1]
+            if (a == 0 and b == 0):
+                result.append(0)
+            if (a == 0 and b == 1):
+                result.append(1)
+            if (a == 1 and b == 0):
+                result.append(2)
+            bit_pos += 2
+            if (len(result) >= self.mpc_rounds):
+                break
+            if (bit_pos >= self.hash_length):
+                shake128 = hashlib.shake_128()
+                shake128.update(bytes([0x01]))
+                shake128.update(tmp_hash)
+                tmp_hash = shake128.digest(int(self.hash_length / 8))
+                tmp_bitvector = BitVector(rawbytes=tmp_hash)
+                bit_pos = 0
 
-    # Generate public key [c,p]
-    self.lowmc.set_priv_key(raw_priv_key)
-    raw_c = self.lowmc.encrypt(raw_p)
-    bitvector_c = BitVector(rawbytes = raw_c)
-    self.__pub_key = Publickey(bitvector_c, bitvector_p)
+        return result
 
-  # Serialize a full signature from self.__signature
-  def serialize_signature(self):
+    # Calculating the proofs from the challenges, seeds,
+    # transcripts, i_shares and commitments
+    def prove(self):
+        """ToDo."""
+        proofs = []
 
-    result = bytearray()
+        for t in range(self.mpc_rounds):
+            tmp_proof = Proof()
 
-    # Append challenges as bytes
-    challenges = BitVector(size = 0)
-    for i in self.__signature.challenges:
-      if (i == 0):
-        challenges = challenges + BitVector(bitlist = [0,0])
-      if (i == 1):
-        challenges = challenges + BitVector(bitlist = [1,0])
-      if (i == 2):
-        challenges = challenges + BitVector(bitlist = [0,1])
-    diff = 8 - (challenges.length() % 8)
-    challenges = challenges + BitVector(intVal = 0, size = diff)
-    result.extend(bytes.fromhex(challenges.get_bitvector_in_hex()))
+            challenge = self.__challenges[t]
+            if (challenge == 0):
+                tmp_proof.seed_1 = self.__seeds[t][0]
+                tmp_proof.seed_2 = self.__seeds[t][1]
 
-    # Append salt as bytes
-    result.extend(bytes.fromhex(self.__signature.salt.get_bitvector_in_hex()))
+            if (challenge == 1):
+                tmp_proof.seed_1 = self.__seeds[t][1]
+                tmp_proof.seed_2 = self.__seeds[t][2]
+                tmp_proof.i_share = self.__views[t][2].i_share
 
-    # Append all proofs
-    for t in range(self.mpc_rounds):
-      challenge_value = self.__signature.challenges[t]
-      
-      result.extend(self.__signature.proofs[t].view_3_commit)
-      result.extend(bytes.fromhex(self.__signature.proofs[t].transcript.get_bitvector_in_hex()))
-      result.extend(bytes.fromhex(self.__signature.proofs[t].seed_1.get_bitvector_in_hex()))
-      result.extend(bytes.fromhex(self.__signature.proofs[t].seed_2.get_bitvector_in_hex()))
-      if (challenge_value == 1 or challenge_value == 2):
-        result.extend(bytes.fromhex(self.__signature.proofs[t].i_share.get_bitvector_in_hex()))
+            if (challenge == 2):
+                tmp_proof.seed_1 = self.__seeds[t][2]
+                tmp_proof.seed_2 = self.__seeds[t][0]
+                tmp_proof.i_share = self.__views[t][2].i_share
 
-    self.__signature_ser = result
+            tmp_proof.transcript = self.__views[t][(challenge + 1) % 3] \
+                .transcript
+            tmp_proof.view_3_commit = self.__commitments[t][(
+                                                challenge + 2) % 3].hash
 
-  def deserialize_signature(self):
+            proofs.append(tmp_proof)
 
-    # Create an empty signature
-    self.__signature = Signature()
-    self.__signature.proofs = []
-    bytes_pos = 0
+        return proofs
 
-    # Get challenges
-    challenge_length = math.ceil(2 * self.mpc_rounds / 8)
-    challenges_bytes = self.__signature_ser[bytes_pos:bytes_pos + challenge_length]
-    challenges_bitvector = BitVector(rawbytes = challenges_bytes)
-    challenges = []
-    for i in range(0, (2 * self.mpc_rounds), 2):
-      two_bits = str(challenges_bitvector[i:i + 2])
-      if (two_bits == '00'):
-        challenges.append(0)
-      if (two_bits == '10'):
-        challenges.append(1)
-      if (two_bits == '01'):
-        challenges.append(2)
-    self.__signature.challenges = challenges
-    bytes_pos += challenge_length
+    # Set or generate the priv and pub key
+    def generate_keys(self, p=None, priv_key=None):
+        """ToDo."""
+        # Generate random p (plaintext) with length self.keysize
+        if (p is None):
+            raw_p = os.urandom(int(self.keysize / 8))
+        else:
+            raw_p = p
+        bitvector_p = BitVector(rawbytes=raw_p)
 
-    # Get salt
-    salt_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
-    salt = BitVector(rawbytes = salt_bytes)
-    self.__signature.salt = salt
-    bytes_pos += self.blocksize_bytes
+        # Generate private key with length self.keysize
+        if (priv_key is None):
+            raw_priv_key = os.urandom(int(self.keysize / 8))
+        else:
+            raw_priv_key = priv_key
+        self.__priv_key = BitVector(rawbytes=raw_priv_key)
 
-    # Deserialize the proofs in all mpc_rounds
-    for t in range(self.mpc_rounds):
+        # Generate public key [c,p]
+        self.lowmc.private_key = raw_priv_key
+        raw_c = self.lowmc.encrypt(raw_p)
+        bitvector_c = BitVector(rawbytes=raw_c)
+        self.__pub_key = Publickey(bitvector_c, bitvector_p)
 
-      proof = Proof()
-      chal_bit = challenges[t]
+    # Serialize a full signature from self.__signature
+    def serialize_signature(self):
+        """ToDo."""
+        result = bytearray()
 
-      # Get view_3_commitment
-      view_3_commit_bytes = self.__signature_ser[bytes_pos:bytes_pos + int(self.hash_length / 8)]
-      proof.view_3_commit = view_3_commit_bytes
-      bytes_pos += int(self.hash_length / 8)
+        # Append challenges as bytes
+        challenges = BitVector(size=0)
+        for i in self.__signature.challenges:
+            if (i == 0):
+                challenges = challenges + BitVector(bitlist=[0, 0])
+            if (i == 1):
+                challenges = challenges + BitVector(bitlist=[1, 0])
+            if (i == 2):
+                challenges = challenges + BitVector(bitlist=[0, 1])
+        diff = 8 - (challenges.length() % 8)
+        challenges = challenges + BitVector(intVal=0, size=diff)
+        result.extend(bytes.fromhex(challenges.get_bitvector_in_hex()))
 
-      # Get transcript
-      transcript_bytes = self.__signature_ser[bytes_pos:bytes_pos + int((3 * self.rounds * self.sboxes)/8)]
-      proof.transcript = BitVector(rawbytes = transcript_bytes)
-      bytes_pos += int((3 * self.rounds * self.sboxes)/8)
+        # Append salt as bytes
+        result.extend(bytes.fromhex(self.__signature.salt
+                                    .get_bitvector_in_hex()))
 
-      # Get seed_1
-      seed_1_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
-      proof.seed_1 = BitVector(rawbytes = seed_1_bytes)
-      bytes_pos += self.blocksize_bytes
+        # Append all proofs
+        for t in range(self.mpc_rounds):
+            challenge_value = self.__signature.challenges[t]
 
-      # Get seed_2
-      seed_2_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
-      proof.seed_2 = BitVector(rawbytes = seed_2_bytes)
-      bytes_pos += self.blocksize_bytes
+            result.extend(self.__signature.proofs[t].view_3_commit)
+            result.extend(bytes.fromhex(self.__signature.proofs[t]
+                                        .transcript.get_bitvector_in_hex()))
+            result.extend(bytes.fromhex(self.__signature.proofs[t].seed_1
+                                        .get_bitvector_in_hex()))
+            result.extend(bytes.fromhex(self.__signature.proofs[t].seed_2
+                                        .get_bitvector_in_hex()))
+            if (challenge_value == 1 or challenge_value == 2):
+                result.extend(bytes.fromhex(self.__signature.proofs[t].i_share
+                                            .get_bitvector_in_hex()))
 
-      # If chal_bit is not 0, then get i_share
-      if not(chal_bit == 0):
-        i_share_bytes = self.__signature_ser[bytes_pos:bytes_pos + self.blocksize_bytes]
-        proof.i_share = BitVector(rawbytes = i_share_bytes) 
+        self.__signature_ser = result
+
+    def deserialize_signature(self):
+        """ToDo."""
+        # Create an empty signature
+        self.__signature = Signature()
+        self.__signature.proofs = []
+        bytes_pos = 0
+
+        # Get challenges
+        challenge_length = math.ceil(2 * self.mpc_rounds / 8)
+        challenges_bytes = self.__signature_ser[bytes_pos:bytes_pos
+                                                + challenge_length]
+        challenges_bitvector = BitVector(rawbytes=challenges_bytes)
+        challenges = []
+        for i in range(0, (2 * self.mpc_rounds), 2):
+            two_bits = str(challenges_bitvector[i:i + 2])
+            if (two_bits == '00'):
+                challenges.append(0)
+            if (two_bits == '10'):
+                challenges.append(1)
+            if (two_bits == '01'):
+                challenges.append(2)
+        self.__signature.challenges = challenges
+        bytes_pos += challenge_length
+
+        # Get salt
+        salt_bytes = self.__signature_ser[bytes_pos:bytes_pos
+                                          + self.blocksize_bytes]
+        salt = BitVector(rawbytes=salt_bytes)
+        self.__signature.salt = salt
         bytes_pos += self.blocksize_bytes
 
-      self.__signature.proofs.append(proof)
+        # Deserialize the proofs in all mpc_rounds
+        for t in range(self.mpc_rounds):
 
-    return
+            proof = Proof()
+            chal_bit = challenges[t]
 
-  # Write serialized signature to file
-  def write_ser_sig_to_file(self, filename):
-    
-    with open(filename, "w") as text_file:
-      text_file.write(self.__signature_ser.hex().upper())
+            # Get view_3_commitment
+            view_3_commit_bytes = self.__signature_ser[
+                                    bytes_pos:bytes_pos
+                                    + int(self.hash_length / 8)]
+            proof.view_3_commit = view_3_commit_bytes
+            bytes_pos += int(self.hash_length / 8)
 
-  # Read serialized signature from file
-  def read_ser_sig_from_file(self, filename):
+            # Get transcript
+            transcript_bytes = self.__signature_ser[
+                                    bytes_pos:bytes_pos
+                                    + int((3 * self.rounds * self.sboxes)/8)]
+            proof.transcript = BitVector(rawbytes=transcript_bytes)
+            bytes_pos += int((3 * self.rounds * self.sboxes)/8)
 
-    with open(filename, "r") as text_file:
-      sig_ser_hex = text_file.read()
-    self.__signature_ser = bytes.fromhex(sig_ser_hex)
+            # Get seed_1
+            seed_1_bytes = self.__signature_ser[bytes_pos:bytes_pos
+                                                + self.blocksize_bytes]
+            proof.seed_1 = BitVector(rawbytes=seed_1_bytes)
+            bytes_pos += self.blocksize_bytes
 
-  # Print out a (not serialized) signature from self.__signature
-  def print_signature(self):
+            # Get seed_2
+            seed_2_bytes = self.__signature_ser[bytes_pos:bytes_pos
+                                                + self.blocksize_bytes]
+            proof.seed_2 = BitVector(rawbytes=seed_2_bytes)
+            bytes_pos += self.blocksize_bytes
 
-    print("Signature:")
-    print("Salt: " + self.__salt.get_bitvector_in_hex())
-    for t in range(self.mpc_rounds):
-      print("Iteration t: " + str(t))
-      print("e_" + str(t) + ": " + str(self.__signature.challenges[t]))
-      print("b_" + str(t) + ": " + self.__signature.proofs[t].view_3_commit.hex())
-      print("transcript: " + self.__signature.proofs[t].transcript.get_bitvector_in_hex())
-      print("seed1: " + self.__signature.proofs[t].seed_1.get_bitvector_in_hex())
-      print("seed2: " + self.__signature.proofs[t].seed_2.get_bitvector_in_hex())
-      if (not (self.__signature.challenges[t] == 0)):
-        print("inputShare: " + self.__signature.proofs[t].i_share.get_bitvector_in_hex())
+            # If chal_bit is not 0, then get i_share
+            if not(chal_bit == 0):
+                i_share_bytes = self.__signature_ser[bytes_pos:bytes_pos
+                                                     + self.blocksize_bytes]
+                proof.i_share = BitVector(rawbytes=i_share_bytes)
+                bytes_pos += self.blocksize_bytes
 
-  # Print out a serialized signature from self.__signature_ser
-  def print_signature_ser(self):
-    print(self.__signature_ser.hex().upper())
+            self.__signature.proofs.append(proof)
 
+    # Write serialized signature to file
+    def write_ser_sig_to_file(self, filename):
+        """ToDo."""
+        with open(filename, "w") as text_file:
+            text_file.write(self.__signature_ser.hex().upper())
+
+    # Read serialized signature from file
+    def read_ser_sig_from_file(self, filename):
+        """ToDo."""
+        with open(filename, "r") as text_file:
+            sig_ser_hex = text_file.read()
+        self.__signature_ser = bytes.fromhex(sig_ser_hex)
+
+    # Print out a (not serialized) signature from self.__signature
+    def print_signature(self):
+        """ToDo."""
+        print("Signature:")
+        print("Salt: " + self.__salt.get_bitvector_in_hex())
+        for t in range(self.mpc_rounds):
+            print("Iteration t: " + str(t))
+            print("e_" + str(t) + ": " + str(self.__signature.challenges[t]))
+            print("b_" + str(t) + ": " + self.__signature.proofs[t]
+                                             .view_3_commit.hex())
+            print("transcript: " + self.__signature.proofs[t].transcript
+                                                   .get_bitvector_in_hex())
+            print("seed1: " + self.__signature.proofs[t].seed_1
+                                              .get_bitvector_in_hex())
+            print("seed2: " + self.__signature.proofs[t].seed_2
+                                              .get_bitvector_in_hex())
+            if (not (self.__signature.challenges[t] == 0)):
+                print("inputShare: " + self.__signature.proofs[t].i_share
+                                                       .get_bitvector_in_hex())
+
+    # Print out a serialized signature from self.__signature_ser
+    def print_signature_ser(self):
+        """ToDo."""
+        print(self.__signature_ser.hex().upper())
+
+    def print_states(self, states, r):
+        """Print states."""
+        print("Round " + str(r))
+        for i in range(3):
+            print("state " + str(i) + ": {0:x}".format(states[i]))
