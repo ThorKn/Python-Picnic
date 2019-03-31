@@ -1,6 +1,6 @@
 '''
 ---------------------------------------------------
-Picnic tests in Python
+Picnic Tests in Python
 Author: Thorsten Knoll
 Date: March 2019
 
